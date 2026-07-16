@@ -1,0 +1,302 @@
+:: StoryInterface
+<div id="app-shell" class="app-shell">
+        <!-- Region 1: Left Sidebar (top→bottom: title, menu, history, system)
+             Wrapped in #ui-bar-body so SugarCube's default ui-bar.css rules apply. -->
+        <aside id="left-sidebar" class="sidebar sidebar--left">
+                <div id="ui-bar-body">
+                        <section data-slot="title"></section>
+                        <section data-slot="menu"></section>
+                        <section data-slot="history"></section>
+                        <section data-slot="system"></section>
+                </div>
+        </aside>
+
+        <!-- Region 2 + 3: Main area -->
+        <main id="main-area" class="main-area">
+                <!-- Region 2: Scene Canvas -->
+                <div id="scene-canvas" class="scene-canvas">
+                        <div class="scene-layer scene-layer--bg"></div>
+                        <div class="scene-layer scene-layer--scene"></div>
+                        <div class="scene-layer scene-layer--sprites"></div>
+                        <div class="scene-layer scene-layer--effects"></div>
+                </div>
+
+                <!-- Region 3: Story Content (SugarCube renders here) -->
+                <div id="passages" class="story-content"></div>
+        </main>
+
+        <!-- Region 4: Right Sidebar -->
+        <aside id="right-sidebar" class="sidebar sidebar--right">
+                <section data-slot="avatar"></section>
+                <section data-slot="equipment"></section>
+                <section data-slot="stats"></section>
+                <section data-slot="needs"></section>
+                <section data-slot="effects"></section>
+        </aside>
+
+        <!-- Region 5: Floating Window -->
+        <div id="floating-window" class="floating-window" aria-hidden="true">
+                <header class="floating-window__header">
+                        <nav id="fw-tabs" class="floating-window__tabs"></nav>
+                        <button id="fw-close" class="floating-window__close" type="button">&times;</button>
+                </header>
+                <div id="fw-content" class="floating-window__content"></div>
+        </div>
+</div>
+
+:: UI-Script[script]
+/* =========================================================================
+ * setup.ui — Persistent application shell.
+ *
+ * Extension point for later [script] passages:
+ *   setup.ui.tabs.push({ id, title, render: function(contentEl) { ... } })
+ *
+ * API:
+ *   setup.ui.updateLeft(slot, html)      // slot: saves|meta|status|controls
+ *   setup.ui.updateRight(slot, html)     // slot: avatar|equipment|stats|needs|effects
+ *   setup.ui.updateScene(layer, html)    // layer: bg|scene|sprites|effects
+ *   setup.ui.openWindow(tabId?)          // opens floating window; switches to tabId if given
+ *   setup.ui.closeWindow()
+ *   setup.ui.switchTab(tabId)
+ *
+ * Region 3 (#passages) is owned by SugarCube — no update method.
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!window.setup) window.setup = {};
+        setup.ui = setup.ui || {};
+        setup.ui.tabs = [];
+
+        var els = {};
+        var activeTab = null;
+        var isOpen = false;
+
+        function init() {
+                els.leftSidebar  = document.getElementById("left-sidebar");
+                els.rightSidebar = document.getElementById("right-sidebar");
+                els.sceneCanvas  = document.getElementById("scene-canvas");
+                els.fw           = document.getElementById("floating-window");
+                els.fwTabs       = document.getElementById("fw-tabs");
+                els.fwContent    = document.getElementById("fw-content");
+                els.fwClose      = document.getElementById("fw-close");
+
+                if (els.fwClose) {
+                        els.fwClose.addEventListener("click", setup.ui.closeWindow);
+                }
+                document.addEventListener("keydown", function (e) {
+                        if (e.key === "Escape" && isOpen) setup.ui.closeWindow();
+                });
+        }
+
+        // --- Region 1: Left Sidebar ---
+        setup.ui.updateLeft = function (slot, html) {
+                var el = els.leftSidebar.querySelector('[data-slot="' + slot + '"]');
+                if (el) el.innerHTML = html;
+        };
+
+        // --- Region 2: Scene Canvas ---
+        setup.ui.updateScene = function (layer, html) {
+                var el = els.sceneCanvas.querySelector('.scene-layer--' + layer);
+                if (el) el.innerHTML = html;
+        };
+
+        // --- Region 4: Right Sidebar ---
+        setup.ui.updateRight = function (slot, html) {
+                var el = els.rightSidebar.querySelector('[data-slot="' + slot + '"]');
+                if (el) el.innerHTML = html;
+        };
+
+        // --- Region 5: Floating Window ---
+        function renderTabBar() {
+                els.fwTabs.innerHTML = "";
+                setup.ui.tabs.forEach(function (tab) {
+                        var btn = document.createElement("button");
+                        btn.type = "button";
+                        btn.className = "fw-tab" + (tab.id === activeTab ? " is-active" : "");
+                        btn.textContent = tab.title;
+                        btn.addEventListener("click", function () { setup.ui.switchTab(tab.id); });
+                        els.fwTabs.appendChild(btn);
+                });
+        }
+
+        function renderActiveTab() {
+                els.fwContent.innerHTML = "";
+                var tab = null;
+                for (var i = 0; i < setup.ui.tabs.length; i++) {
+                        if (setup.ui.tabs[i].id === activeTab) { tab = setup.ui.tabs[i]; break; }
+                }
+                if (tab && typeof tab.render === "function") {
+                        tab.render(els.fwContent);
+                } else {
+                        els.fwContent.innerHTML = '<p><em>No tab content.</em></p>';
+                }
+        }
+
+        setup.ui.openWindow = function (tabId) {
+                if (tabId) {
+                        activeTab = tabId;
+                } else if (!activeTab && setup.ui.tabs.length > 0) {
+                        activeTab = setup.ui.tabs[0].id;
+                }
+                isOpen = true;
+                els.fw.classList.add("is-open");
+                els.fw.setAttribute("aria-hidden", "false");
+                renderTabBar();
+                renderActiveTab();
+        };
+
+        setup.ui.closeWindow = function () {
+                isOpen = false;
+                els.fw.classList.remove("is-open");
+                els.fw.setAttribute("aria-hidden", "true");
+        };
+
+        setup.ui.switchTab = function (tabId) {
+                activeTab = tabId;
+                if (isOpen) {
+                        renderTabBar();
+                        renderActiveTab();
+                }
+        };
+
+        // SugarCube fires :storyready after StoryInterface is in the DOM.
+        if (window.$) {
+                $(document).on(":storyready", init);
+        } else if (document.readyState !== "loading") {
+                init();
+        } else {
+                document.addEventListener("DOMContentLoaded", init);
+        }
+})();
+
+:: UI-Style[stylesheet]
+:root {
+        /* Dimensions only — colors and button styles inherit from SugarCube. */
+        --left-sidebar-width:  240px;
+        --right-sidebar-width: 240px;
+        --scene-height:        50vh;
+        --sidebar-pad:         8px;
+        --story-pad:           8px;
+        --fw-width:            600px;
+        --fw-max-width:        85%;
+        --fw-max-height:       85%;
+}
+
+/* Override only what the shell layout requires.
+   Body color, font, and background are inherited from SugarCube's main.css. */
+html, body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+}
+
+.app-shell {
+        display: grid;
+        grid-template-columns: var(--left-sidebar-width) 1fr var(--right-sidebar-width);
+        height: 100vh;
+}
+
+/* --- Region 1 / 4: Sidebars --- */
+.sidebar {
+        overflow-y: auto;
+        padding: var(--sidebar-pad);
+        box-sizing: border-box;
+}
+.sidebar--left  { border-right: 1px solid #444; }
+.sidebar--right { border-left:  1px solid #444; }
+
+.sidebar [data-slot] {
+        padding: var(--sidebar-pad);
+        margin-bottom: var(--sidebar-pad);
+        min-height: 24px;
+}
+/* Show dashed outline only on empty slots (skeleton aid). */
+.sidebar [data-slot]:empty {
+        border: 1px dashed #444;
+}
+
+/* --- Region 2 / 3: Main area --- */
+.main-area {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+}
+
+.scene-canvas {
+        position: relative;
+        flex: 0 0 var(--scene-height);
+        overflow: hidden;
+        border-bottom: 1px solid #444;
+        background: #000;
+}
+
+.scene-layer {
+        position: absolute;
+        inset: 0;
+}
+.scene-layer--bg       { z-index: 1; }
+.scene-layer--scene    { z-index: 2; }
+.scene-layer--sprites  { z-index: 3; }
+.scene-layer--effects  { z-index: 4; }
+
+.story-content {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: var(--story-pad);
+        box-sizing: border-box;
+}
+
+/* --- Region 5: Floating Window ---
+   Uses SugarCube's #ui-bar palette (#222 / #444) so it visually matches
+   the default sidebar. Buttons (close, tabs) inherit SugarCube's button styles. */
+.floating-window {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: var(--fw-width);
+        max-width: var(--fw-max-width);
+        max-height: var(--fw-max-height);
+        display: none;
+        flex-direction: column;
+        z-index: 100;
+        overflow: hidden;
+        background: #222;
+        border: 1px solid #444;
+        border-radius: 4px;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.floating-window.is-open { display: flex; }
+
+.floating-window__header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid #444;
+}
+
+.floating-window__tabs {
+        display: flex;
+        gap: 4px;
+        flex: 1;
+}
+
+/* Active tab uses SugarCube's hover background so it visually fits. */
+.fw-tab.is-active {
+        background-color: #444;
+        border-color: #666;
+}
+
+.floating-window__close {
+        flex: 0 0 auto;
+}
+
+.floating-window__content {
+        padding: 8px;
+        overflow-y: auto;
+        flex: 1;
+}

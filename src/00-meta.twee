@@ -1,0 +1,10 @@
+:: StoryTitle
+isekai escape
+
+:: StoryData
+{
+  "ifid": "DB94FA52-B4EC-4A88-B6D0-33E344247F49",
+  "format": "SugarCube",
+  "format-version": "2.37.0",
+  "start": "Start"
+}
