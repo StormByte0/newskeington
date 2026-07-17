@@ -1,17 +1,39 @@
 :: Inventory [nobr]
 /%
-	Floating-window tab content (auto-registered because this passage
-	exists). Replace with your real inventory UI. Any widget macro works
-	here, and plain SugarCube markup too.
+        Floating-window tab content (auto-registered because this passage
+        exists). Renders the full inventory UI via the <<inventoryView>>
+        macro defined in 11-inventory.twee.
+
+        Layout (per spec):
+          +-------------------+----------+
+          | Inventory         |          |
+          | (66%w × 80%h)     | Equipped |
+          | search + filters  | (33%w ×  |
+          +-------------------+  100%h)  |
+          | Outfit Sets       |          |
+          | (66%w × 20%h)     |          |
+          +-------------------+----------+
+
+        The view is fully driven by $inventory, $equipped and $outfitSets
+        state. Action buttons (use / inspect / equip / unequip / drop)
+        mutate state and call setup.ui.refresh(), which re-renders both
+        this view and the right sidebar (avatar + stats).
 %/
-<<uiCard "Pack">>
-	<<uiValue "Gold" $gold "g">>
-	<<uiLabel "Your pack is empty.">>
-<</uiCard>>
+<<inventoryView>>
 
 :: Quests [nobr]
-/% Floating-window tab content. Replace with your real quest log. %/
-<<uiCard "Quests">>
-	<<uiCheck "Find out where you are" true>>
-	<<uiCheck "Escape this world" false>>
-<</uiCard>>
+/%
+        Floating-window tab content. Renders the full quest log via the
+        <<questLog>> macro defined in 12-quests.twee.
+
+        Quests are catalog-driven: $quests = { active:[], completed:[] }
+        stores only quest ids; everything else (title, description,
+        subquests, status) is read from setup.quests.catalog at render
+        time. Subquest status is *validated* — each subquest's status()
+        function checks state variables and returns "not_started",
+        "in_progress", "completed", or "failed".
+
+        Start a quest from any story passage with <<questStart "id">>
+        and complete it with <<questComplete "id">>.
+%/
+<<questLog>>

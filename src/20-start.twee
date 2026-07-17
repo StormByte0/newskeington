@@ -1,0 +1,122 @@
+:: StoryInit
+/%
+        Demo state so the example PanelRight widgets have something to show,
+        plus the inventory / equipped / outfits / quests state.
+
+        The item and quest *catalogs* (full definitions, thumbnails, action
+        handlers) are registered in 13-catalog.twee. This passage only
+        initializes the *state* — i.e. which catalog entries the player
+        currently owns / has active.
+%/
+<<set $gold = 120>>
+<<set $hp = 34, $maxhp = 100>>
+<<set $mp = 12, $maxmp = 40>>
+<<set $poisoned = false, $blessed = true>>
+<<set $attack = 0>>
+
+/% Inventory state: array of {id, qty}. IDs must exist in the item catalog. %/
+<<set $inventory = [
+        { id: "potion_health", qty: 2 },
+        { id: "potion_mana",   qty: 1 },
+        { id: "bread_loaf",    qty: 3 },
+        { id: "tunic_cloth",   qty: 1 },
+        { id: "armor_leather", qty: 1 },
+        { id: "trousers_linen",qty: 1 },
+        { id: "boots_leather", qty: 1 },
+        { id: "hat_wide",      qty: 1 },
+        { id: "sword_iron",    qty: 1 },
+        { id: "dagger_rusty",  qty: 1 },
+        { id: "town_map",      qty: 1 },
+        { id: "amulet_strange",qty: 1 }
+]>>
+
+/% Equipped state: slot -> itemId. Empty object = nothing equipped. %/
+<<set $equipped = {}>>
+
+/% Saved outfits: array of {name, equipped}. Starts empty. %/
+<<set $outfitSets = []>>
+
+/% Quest state: only active/completed id lists. Catalog holds the rest. %/
+<<set $quests = { active: [], completed: [] }>>
+
+/% Demo flags that subquest status() functions check. %/
+<<set $lookedAround = false>>
+<<set $foundTown = false>>
+<<set $knowsWorldName = false>>
+<<set $askedMerchant = false>>
+<<set $debtPaid = false>>
+<<set $hasMagicMap = false>>
+<<set $foundPortal = false>>
+<<set $portalOpen = false>>
+<<set $escaped = false>>
+
+:: Start
+You wake up face-down in a field that definitely isn't yours.
+
+<<questStart "awaken_strange_land">>
+
+/%
+        Everything on screen is driven by passages you can edit:
+
+          PanelLeft / PanelRight → sidebars (re-render every passage)
+          <<scene "bg" "forest_clearing">> → set scene layers
+          <<scene "sprites" "alice" "merchant">> → characters, evenly spaced
+          <<avatarset "body_hair" "hair_red_long">> → change portrait layers
+          <<uiRefresh>> → re-render panels after mid-passage $var changes
+
+        Inventory tab: <<inventoryView>> — pack grid + equipped column + outfit sets
+        Quests tab:    <<questLog>>    — catalog-driven quest log
+
+        JS side: setup.items, setup.inventory, setup.outfits, setup.quests
+                 (see 11-inventory.twee, 12-quests.twee, 13-catalog.twee)
+%/
+
+[[Look around|LookAround]]
+[[Sleep again|Start]]
+
+:: LookAround
+You lift your head and scan the horizon. Smoke rises from a cluster of rooftops to the east — could be a town.
+
+<<set $lookedAround = true>>
+<<uiRefresh>>
+
+[[Head toward the town|FoundTown]]
+[[Sleep again|Start]]
+
+:: FoundTown
+The town turns out to be a sleepy hamlet called Murkwell. A merchant waves you over.
+
+<<set $foundTown = true>>
+<<set $knowsWorldName = true>>
+<<uiRefresh>>
+
+<<questStart "find_magic_map">>
+
+[[Talk to the merchant|Merchant]]
+
+:: Merchant
+"So you want the cartographer's map, eh? I'd let him have it, but the man owes me 50 gold. Pay his debt and the map is yours."
+
+<<set $askedMerchant = true>>
+<<uiRefresh>>
+
+<<if $gold >= 50>>
+        [[Pay the 50g debt|PayDebt]]
+<<else>>
+        You don't have 50 gold yet.
+<</if>>
+[[Leave|Start]]
+
+:: PayDebt
+<<set $gold -= 50>>
+<<set $debtPaid = true>>
+<<set $hasMagicMap = true>>
+<<run setup.inventory.add("magic_map", 1)>>
+<<uiRefresh>>
+
+The merchant hands you a folded parchment that shimmers faintly. The cartographer's magic map is yours.
+
+<<questComplete "find_magic_map">>
+<<questStart "escape_this_world">>
+
+[[Continue|Start]]

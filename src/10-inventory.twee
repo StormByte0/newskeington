@@ -1,0 +1,1180 @@
+:: InventoryScript [script]
+/* =========================================================================
+ * Module: inventory — catalog-driven pack, equipment, and outfit sets.
+ *
+ * Visual language: composed from ui-card / ui-action primitives. Only the
+ * six CSS variables from 01-shell.twee are used.
+ *
+ * LAYOUT (normal):
+ *   +-------------------+----------+
+ *   | Inventory         |          |
+ *   |  (header: title + | Equipped |
+ *   |   search)         |  (filled |
+ *   |  type tabs + sort |  slots   |
+ *   |  item grid        |  only)   |
+ *   +-------------------+          |
+ *   | Outfit Sets       |          |
+ *   |  (header + save)  |          |
+ *   |  preset squares   |          |
+ *   +-------------------+----------+
+ *
+ * LAYOUT (item view — overrides the above):
+ *   When the player clicks "View" on an item, the entire inventory content
+ *   is replaced by a single item-detail panel showing the large image,
+ *   name, type, tags, description, equipped status, and action buttons.
+ *   A "Go Back" button returns to the normal layout. The view auto-closes
+ *   when: the user switches tabs, clicks the inventory button again,
+ *   closes the window, or the item is consumed.
+ *
+ * ITEM CELLS:
+ *   - Uniform 72×72 squares.
+ *   - Qty badge on top-right corner.
+ *   - Hover reveals 2 compact buttons in a ROW at the BOTTOM of the cell:
+ *     [primary action] [View]. Primary action is Use (consumables),
+ *     Equip (equipables), or Unequip (already equipped).
+ *
+ * EQUIPPED CELLS:
+ *   - Same 72×72 squares, same hover principle.
+ *   - First button is Unequip, second is View.
+ *   - No slot label underneath — the avatar shows which slot is filled.
+ *
+ * PASSAGE AREA:
+ *   When the floating window is open, body.fw-open is set (by 07-window.twee)
+ *   and the CSS in 01-shell.twee dims + disables #passages so the player
+ *   can't click story links while in the inventory.
+ *
+ * STATE (save/rewind-safe):
+ *   $inventory   [ {id, qty}, ... ]
+ *   $equipped    { slot: itemId, ... }
+ *   $outfitSets  [ {name, equipped}, ... ]
+ *
+ * UI STATE (module-scope, session-only):
+ *   viewingItemId   item currently shown in the item-view panel (null = grid)
+ *   searchQuery, activeType, sortMode, outfitDraft
+ *
+ * MACRO: <<inventoryView>>
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[inventory] setup.ui not ready — deferring macro registration");
+                return;
+        }
+
+        var h = setup.ui.h;
+        function V() { return State.variables; }
+
+        function ensureState() {
+                var v = V();
+                if (!Array.isArray(v.inventory)) v.inventory = [];
+                if (typeof v.equipped !== "object" || v.equipped == null) v.equipped = {};
+                if (!Array.isArray(v.outfitSets)) v.outfitSets = [];
+                return v;
+        }
+
+        var suspend = false;
+        var pending = false;
+        function refresh() {
+                if (suspend) return;
+                if (pending) return;
+                pending = true;
+                setTimeout(function () { pending = false; setup.ui.refresh(); }, 0);
+        }
+        function batch(fn) {
+                var prev = suspend; suspend = true;
+                try { fn(); }
+                finally { suspend = prev; refresh(); }
+        }
+
+        /* =====================================================================
+         *  setup.items — static catalog
+         * ===================================================================== */
+        setup.items = {
+                catalog: Object.create(null),
+
+                register: function (id, def) {
+                        if (!id) throw new Error("setup.items.register: id required");
+                        var base = {
+                                id: id, name: id, description: "", type: "misc",
+                                tags: [],
+                                thumbnail: "", equipable: false, equipSlot: null,
+                                avatarLayer: null, avatarImage: null, consumable: false,
+                                actions: { use: false, drop: false, transfer: false }
+                        };
+                        var merged = Object.assign(base, def || {});
+                        if (!Array.isArray(merged.tags)) merged.tags = [];
+                        merged.tags = merged.tags.map(String);
+                        this.catalog[id] = merged;
+                },
+                get:    function (id) { return this.catalog[id] || null; },
+                all:    function ()   { return Object.keys(this.catalog); },
+                types: function () {
+                        var seen = Object.create(null), out = [];
+                        Object.keys(this.catalog).forEach(function (k) {
+                                var t = setup.items.catalog[k].type || "misc";
+                                if (!seen[t]) { seen[t] = true; out.push(t); }
+                        });
+                        return out.sort();
+                }
+        };
+
+        /* =====================================================================
+         *  setup.inventory — pack + equipment state operations
+         * ===================================================================== */
+        setup.inventory = {
+                add: function (id, qty) {
+                        qty = qty || 1;
+                        ensureState();
+                        var v = V();
+                        for (var i = 0; i < v.inventory.length; i++) {
+                                if (v.inventory[i].id === id) { v.inventory[i].qty += qty; refresh(); return this; }
+                        }
+                        v.inventory.push({ id: id, qty: qty });
+                        refresh();
+                        return this;
+                },
+                remove: function (id, qty) {
+                        qty = qty || 1;
+                        ensureState();
+                        var v = V();
+                        for (var i = 0; i < v.inventory.length; i++) {
+                                if (v.inventory[i].id === id) {
+                                        v.inventory[i].qty -= qty;
+                                        if (v.inventory[i].qty <= 0) v.inventory.splice(i, 1);
+                                        break;
+                                }
+                        }
+                        refresh();
+                        return this;
+                },
+                has: function (id) {
+                        var v = V();
+                        if (!Array.isArray(v.inventory)) return false;
+                        for (var i = 0; i < v.inventory.length; i++) {
+                                if (v.inventory[i].id === id) return true;
+                        }
+                        return false;
+                },
+                count: function (id) {
+                        var v = V();
+                        if (!Array.isArray(v.inventory)) return 0;
+                        for (var i = 0; i < v.inventory.length; i++) {
+                                if (v.inventory[i].id === id) return v.inventory[i].qty;
+                        }
+                        return 0;
+                },
+                slots: function () {
+                        var seen = Object.create(null), out = [];
+                        Object.keys(setup.items.catalog).forEach(function (k) {
+                                var s = setup.items.catalog[k].equipSlot;
+                                if (s && !seen[s]) { seen[s] = true; out.push(s); }
+                        });
+                        return out.sort();
+                },
+                isEquipped: function (id) {
+                        var v = V();
+                        if (!v.equipped) return false;
+                        for (var k in v.equipped) if (v.equipped[k] === id) return true;
+                        return false;
+                },
+                equippedSlot: function (id) {
+                        var v = V();
+                        if (!v.equipped) return null;
+                        for (var k in v.equipped) if (v.equipped[k] === id) return k;
+                        return null;
+                },
+                equip: function (id) {
+                        var def = setup.items.get(id);
+                        if (!def || !def.equipable) {
+                                console.warn("[inventory] not equipable:", id);
+                                return this;
+                        }
+                        ensureState();
+                        var v = V();
+                        var slot = def.equipSlot;
+                        if (v.equipped[slot]) {
+                                var prevId = v.equipped[slot];
+                                var prevDef = setup.items.get(prevId);
+                                v.inventory.push({ id: prevId, qty: 1 });
+                                if (prevDef && prevDef.avatarLayer) setup.avatar.clearLayer(prevDef.avatarLayer);
+                                if (prevDef && typeof prevDef.onUnequip === "function") {
+                                        try { prevDef.onUnequip({ item: prevDef, state: v }); } catch (e) { console.error(e); }
+                                }
+                        }
+                        this._takeFromPack(id, 1);
+                        v.equipped[slot] = id;
+                        if (def.avatarLayer && def.avatarImage) {
+                                setup.avatar.setLayer(def.avatarLayer, def.avatarImage);
+                        }
+                        if (typeof def.onEquip === "function") {
+                                try { def.onEquip({ item: def, state: v }); } catch (e) { console.error(e); }
+                        }
+                        refresh();
+                        return this;
+                },
+                unequip: function (slot) {
+                        ensureState();
+                        var v = V();
+                        var id = v.equipped[slot];
+                        if (!id) return this;
+                        var def = setup.items.get(id);
+                        delete v.equipped[slot];
+                        v.inventory.push({ id: id, qty: 1 });
+                        if (def && def.avatarLayer) setup.avatar.clearLayer(def.avatarLayer);
+                        if (def && typeof def.onUnequip === "function") {
+                                try { def.onUnequip({ item: def, state: v }); } catch (e) { console.error(e); }
+                        }
+                        refresh();
+                        return this;
+                },
+                use: function (id) {
+                        var def = setup.items.get(id);
+                        if (!def) return this;
+                        var v = ensureState();
+                        if (typeof def.onUse === "function") {
+                                try { def.onUse({ item: def, state: v }); } catch (e) { console.error(e); }
+                        }
+                        if (def.consumable) this._takeFromPack(id, 1);
+                        /* If the viewed item was consumed, close the view. */
+                        if (def.consumable && !this.has(id) && !this.isEquipped(id)) {
+                                viewingItemId = null;
+                        }
+                        refresh();
+                        return this;
+                },
+                _takeFromPack: function (id, qty) {
+                        var v = V();
+                        for (var i = 0; i < v.inventory.length; i++) {
+                                if (v.inventory[i].id === id) {
+                                        v.inventory[i].qty -= qty;
+                                        if (v.inventory[i].qty <= 0) v.inventory.splice(i, 1);
+                                        return;
+                                }
+                        }
+                },
+
+                /* --- Item view panel state (module-scope via closure) --- */
+                setView: function (id) { viewingItemId = id; refresh(); },
+                clearView: function () { viewingItemId = null; refresh(); }
+        };
+
+        /* =====================================================================
+         *  setup.outfits — save / load / delete equipped snapshots
+         * ===================================================================== */
+        setup.outfits = {
+                save: function (name) {
+                        ensureState();
+                        var v = V();
+                        var snapshot = JSON.parse(JSON.stringify(v.equipped));
+                        var existing = null;
+                        for (var i = 0; i < v.outfitSets.length; i++) {
+                                if (v.outfitSets[i].name === name) { existing = v.outfitSets[i]; break; }
+                        }
+                        if (existing) existing.equipped = snapshot;
+                        else v.outfitSets.push({ name: name, equipped: snapshot });
+                        refresh();
+                        return this;
+                },
+                load: function (name) {
+                        ensureState();
+                        var v = V();
+                        var set = null;
+                        for (var i = 0; i < v.outfitSets.length; i++) {
+                                if (v.outfitSets[i].name === name) { set = v.outfitSets[i]; break; }
+                        }
+                        if (!set) return this;
+                        batch(function () {
+                                var slots = Object.keys(v.equipped).slice();
+                                slots.forEach(function (slot) { setup.inventory.unequip(slot); });
+                                Object.keys(set.equipped).forEach(function (slot) {
+                                        var itemId = set.equipped[slot];
+                                        if (setup.inventory.has(itemId)) setup.inventory.equip(itemId);
+                                });
+                        });
+                        return this;
+                },
+                "delete": function (name) {
+                        ensureState();
+                        var v = V();
+                        v.outfitSets = v.outfitSets.filter(function (s) { return s.name !== name; });
+                        refresh();
+                        return this;
+                },
+                list: function () {
+                        var v = V();
+                        if (!Array.isArray(v.outfitSets)) return [];
+                        return v.outfitSets.map(function (s) { return s.name; });
+                }
+        };
+
+        /* =====================================================================
+         *  UI state (module-scope)
+         * ===================================================================== */
+        var viewingItemId = null;
+        var searchQuery   = "";
+        var activeType    = "all";
+        var sortMode      = "name_asc";
+        var outfitDraft   = "";
+
+        /* =====================================================================
+         *  Hooks: clear the item view when the tab switches, the window
+         *  closes, or the inventory button is clicked again.
+         * ===================================================================== */
+        var _origSwitchTab = setup.ui.switchTab;
+        setup.ui.switchTab = function (tabId) {
+                viewingItemId = null;
+                return _origSwitchTab.apply(this, arguments);
+        };
+        var _origCloseWindow = setup.ui.closeWindow;
+        setup.ui.closeWindow = function () {
+                viewingItemId = null;
+                return _origCloseWindow.apply(this, arguments);
+        };
+
+        /* Re-register the inventory action so clicking the Inventory button
+         * clears any open item view before opening/focusing the window. */
+        setup.actions.register("inventory", {
+                label: "Inventory", icon: "\uF0C9",
+                handler: function () {
+                        viewingItemId = null;
+                        setup.ui.openWindow("inventory");
+                }
+        });
+
+        /* =====================================================================
+         *  Helpers
+         * ===================================================================== */
+        function actionButton(label, handler, opts) {
+                opts = opts || {};
+                var cls = "ui-action inv-action";
+                if (opts.compact) cls += " ui-action--compact";
+                if (opts.extraClass) cls += " " + opts.extraClass;
+                var b = h("button", { type: "button", "class": cls, title: opts.title || label }, label);
+                if (opts.disabled) {
+                        b.disabled = true;
+                        b.setAttribute("aria-disabled", "true");
+                }
+                b.addEventListener("click", function (ev) { ev.preventDefault(); ev.stopPropagation(); if (!b.disabled) handler(); });
+                return b;
+        }
+
+        function squareCell(def, opts) {
+                opts = opts || {};
+                var cls = "inv-cell";
+                if (opts.selected)    cls += " is-selected";
+                if (opts.equipped)    cls += " is-equipped";
+                if (opts.empty)       cls += " is-empty";
+                if (opts.extraClass)  cls += " " + opts.extraClass;
+
+                var cell = h("div", { "class": cls, role: opts.role || "button", tabindex: "0" });
+                if (opts.title) cell.setAttribute("title", opts.title);
+
+                if (def && def.thumbnail) {
+                        cell.appendChild(h("img", {
+                                src: setup.media.resolve(def.thumbnail),
+                                alt: def.name || "",
+                                "class": "inv-cell__img",
+                                loading: "lazy", draggable: "false"
+                        }));
+                } else if (def) {
+                        cell.appendChild(h("span", { "class": "inv-cell__ph", text: (def.name || "?").charAt(0) }));
+                } else {
+                        cell.appendChild(h("span", { "class": "inv-cell__ph", text: opts.placeholder || "+" }));
+                }
+
+                if (opts.qty && opts.qty > 1) {
+                        cell.appendChild(h("span", { "class": "inv-cell__qty", text: String(opts.qty) }));
+                }
+                return cell;
+        }
+
+        function prettyLabel(s) {
+                return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+        }
+
+        function makeComparator(mode) {
+                switch (mode) {
+                        case "name_asc":  return function (a, b) { return a.def.name.localeCompare(b.def.name); };
+                        case "name_desc": return function (a, b) { return b.def.name.localeCompare(a.def.name); };
+                        case "qty_asc":   return function (a, b) { return a.entry.qty - b.entry.qty; };
+                        case "qty_desc":  return function (a, b) { return b.entry.qty - a.entry.qty; };
+                        case "type":      return function (a, b) {
+                                var byType = (a.def.type || "misc").localeCompare(b.def.type || "misc");
+                                return byType !== 0 ? byType : a.def.name.localeCompare(b.def.name);
+                        };
+                        default:          return function (a, b) { return a.def.name.localeCompare(b.def.name); };
+                }
+        }
+
+        /* Build the hover overlay for a cell: 2 buttons in a row at the
+         * bottom. `primaryLabel` and `primaryHandler` define the first
+         * button; the second is always "View". */
+        function buildHover(primaryLabel, primaryHandler, viewHandler) {
+                var hover = h("div", { "class": "inv-cell__hover" });
+                if (primaryLabel) {
+                        hover.appendChild(actionButton(primaryLabel, primaryHandler, { compact: true }));
+                }
+                hover.appendChild(actionButton("View", viewHandler, { compact: true }));
+                return hover;
+        }
+
+        /* =====================================================================
+         *  Normal layout renderers
+         * ===================================================================== */
+
+        function renderInventoryCard(v) {
+                var card = h("section", { "class": "ui-card inv-card inv-card--items" });
+
+                var head = h("header", { "class": "ui-card__title inv-card__head" });
+                head.appendChild(h("span", { "class": "inv-card__title-text", text: "Inventory" }));
+                var search = h("input", {
+                        type: "text",
+                        "class": "inv-search",
+                        placeholder: "Search…",
+                        value: searchQuery,
+                        title: "Filter by name, description, or tag"
+                });
+                search.addEventListener("input", function () { searchQuery = search.value; refresh(); });
+                head.appendChild(search);
+                card.appendChild(head);
+
+                var body = h("div", { "class": "ui-card__body inv-card__body" });
+                card.appendChild(body);
+
+                var toolbar = h("div", { "class": "inv-toolbar" });
+                var tabs = h("div", { "class": "inv-tabs", role: "tablist" });
+                var allTypes = ["all"].concat(setup.items.types());
+                allTypes.forEach(function (t) {
+                        var isActive = activeType === t;
+                        var label = t === "all" ? "All" : prettyLabel(t);
+                        var tab = h("button", {
+                                type: "button",
+                                "class": "fw-tab" + (isActive ? " is-active" : ""),
+                                role: "tab",
+                                "aria-selected": isActive ? "true" : "false"
+                        }, label);
+                        tab.addEventListener("click", function () { activeType = t; refresh(); });
+                        tabs.appendChild(tab);
+                });
+                toolbar.appendChild(tabs);
+
+                var sortWrap = h("div", { "class": "inv-sort" });
+                var sel = h("select", { "class": "inv-select", title: "Sort items" });
+                var opts = [
+                        ["name_asc",  "Name A-Z"],
+                        ["name_desc", "Name Z-A"],
+                        ["qty_desc",  "Qty ↓"],
+                        ["qty_asc",   "Qty ↑"],
+                        ["type",      "Type"]
+                ];
+                opts.forEach(function (o) {
+                        var opt = h("option", { value: o[0] }, o[1]);
+                        if (o[0] === sortMode) opt.setAttribute("selected", "selected");
+                        sel.appendChild(opt);
+                });
+                sel.addEventListener("change", function () { sortMode = sel.value; refresh(); });
+                sortWrap.appendChild(sel);
+                toolbar.appendChild(sortWrap);
+                body.appendChild(toolbar);
+
+                var pack = Array.isArray(v.inventory) ? v.inventory : [];
+                var q = searchQuery.trim().toLowerCase();
+                var visible = [];
+                pack.forEach(function (entry) {
+                        var def = setup.items.get(entry.id);
+                        if (!def) return;
+                        if (activeType !== "all" && (def.type || "misc") !== activeType) return;
+                        if (q && def.name.toLowerCase().indexOf(q) < 0 &&
+                            (def.description || "").toLowerCase().indexOf(q) < 0 &&
+                            (def.tags || []).join(" ").toLowerCase().indexOf(q) < 0) return;
+                        visible.push({ entry: entry, def: def });
+                });
+                visible.sort(makeComparator(sortMode));
+
+                var grid = h("div", { "class": "inv-grid" });
+                if (visible.length === 0) {
+                        grid.appendChild(h("div", { "class": "inv-empty", text: "No items match." }));
+                } else {
+                        visible.forEach(function (row) {
+                                var entry = row.entry;
+                                var def = row.def;
+                                var equipped = setup.inventory.isEquipped(entry.id);
+                                var cell = squareCell(def, {
+                                        equipped: equipped,
+                                        qty: entry.qty,
+                                        title: def.name + (equipped ? " (equipped)" : "")
+                                });
+                                cell.setAttribute("data-item-id", entry.id);
+
+                                var primaryLabel = null, primaryHandler = null;
+                                var ac = def.actions || {};
+                                if (ac.use) {
+                                        primaryLabel = "Use";
+                                        primaryHandler = function () { setup.inventory.use(entry.id); };
+                                } else if (def.equipable && !equipped) {
+                                        primaryLabel = "Equip";
+                                        primaryHandler = function () { setup.inventory.equip(entry.id); };
+                                } else if (equipped) {
+                                        primaryLabel = "Unequip";
+                                        primaryHandler = function () {
+                                                setup.inventory.unequip(setup.inventory.equippedSlot(entry.id));
+                                        };
+                                }
+                                var hover = buildHover(primaryLabel, primaryHandler, function () {
+                                        viewingItemId = entry.id;
+                                        refresh();
+                                });
+                                cell.appendChild(hover);
+
+                                cell.addEventListener("click", function (ev) {
+                                        if (ev.target.closest(".inv-cell__hover")) return;
+                                        viewingItemId = entry.id;
+                                        refresh();
+                                });
+                                cell.addEventListener("keydown", function (e) {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                viewingItemId = entry.id;
+                                                refresh();
+                                        }
+                                });
+                                grid.appendChild(cell);
+                        });
+                }
+                body.appendChild(grid);
+                return card;
+        }
+
+        function renderEquippedCard(v) {
+                var card = h("section", { "class": "ui-card inv-card inv-card--equipped" });
+                card.appendChild(h("header", { "class": "ui-card__title" }, "Equipped"));
+                var body = h("div", { "class": "ui-card__body inv-card__body" });
+                card.appendChild(body);
+
+                var equipped = v.equipped || {};
+                var filledSlots = Object.keys(equipped).sort();
+
+                if (filledSlots.length === 0) {
+                        body.appendChild(h("div", { "class": "inv-empty", text: "Nothing equipped." }));
+                        return card;
+                }
+
+                var grid = h("div", { "class": "inv-grid inv-grid--equipped" });
+                filledSlots.forEach(function (slot) {
+                        var itemId = equipped[slot];
+                        var def = setup.items.get(itemId);
+                        if (!def) return;
+                        var cell = squareCell(def, { title: def.name });
+                        cell.setAttribute("data-item-id", itemId);
+                        cell.setAttribute("data-slot", slot);
+
+                        /* Hover: Unequip + View (same row-at-bottom layout). */
+                        var hover = buildHover("Unequip", function () {
+                                setup.inventory.unequip(slot);
+                        }, function () {
+                                viewingItemId = itemId;
+                                refresh();
+                        });
+                        cell.appendChild(hover);
+
+                        cell.addEventListener("click", function (ev) {
+                                if (ev.target.closest(".inv-cell__hover")) return;
+                                viewingItemId = itemId;
+                                refresh();
+                        });
+                        grid.appendChild(cell);
+                });
+                body.appendChild(grid);
+                return card;
+        }
+
+        function renderOutfitCard(v) {
+                var card = h("section", { "class": "ui-card inv-card inv-card--outfits" });
+
+                var head = h("header", { "class": "ui-card__title inv-card__head" });
+                head.appendChild(h("span", { "class": "inv-card__title-text", text: "Outfits" }));
+                var saveRow = h("div", { "class": "inv-outfit-saverow" });
+                var input = h("input", {
+                        type: "text",
+                        "class": "inv-search",
+                        placeholder: "Name…",
+                        maxlength: "20",
+                        value: outfitDraft,
+                        title: "Name this outfit preset"
+                });
+                input.addEventListener("input", function () { outfitDraft = input.value; });
+                input.addEventListener("keydown", function (e) {
+                        if (e.key === "Enter") {
+                                e.preventDefault();
+                                var name = input.value.trim();
+                                if (name) setup.outfits.save(name);
+                        }
+                });
+                saveRow.appendChild(input);
+                saveRow.appendChild(actionButton("Save", function () {
+                        var name = input.value.trim();
+                        if (name) setup.outfits.save(name);
+                }, { compact: true, extraClass: "inv-outfit-save-btn" }));
+                head.appendChild(saveRow);
+                card.appendChild(head);
+
+                var body = h("div", { "class": "ui-card__body inv-card__body" });
+                card.appendChild(body);
+
+                var sets = Array.isArray(v.outfitSets) ? v.outfitSets : [];
+                if (sets.length === 0) {
+                        body.appendChild(h("div", { "class": "inv-empty", text: "No saved outfits." }));
+                } else {
+                        var row = h("div", { "class": "inv-grid inv-grid--outfits" });
+                        sets.forEach(function (s) {
+                                var previewDef = null;
+                                var topId = s.equipped && s.equipped.apparel_top;
+                                if (topId) previewDef = setup.items.get(topId);
+                                var wrap = h("div", { "class": "inv-outfit" });
+                                var cell = squareCell(previewDef, {
+                                        title: "Load: " + s.name,
+                                        placeholder: "★"
+                                });
+                                cell.classList.add("inv-cell--outfit");
+                                cell.addEventListener("click", function () { setup.outfits.load(s.name); });
+                                var del = h("button", {
+                                        type: "button",
+                                        "class": "ui-action inv-outfit__del",
+                                        title: "Delete outfit"
+                                }, "×");
+                                del.addEventListener("click", function (ev) {
+                                        ev.stopPropagation();
+                                        setup.outfits["delete"](s.name);
+                                });
+                                wrap.appendChild(cell);
+                                wrap.appendChild(del);
+                                wrap.appendChild(h("div", { "class": "inv-outfit__name", text: s.name }));
+                                row.appendChild(wrap);
+                        });
+                        body.appendChild(row);
+                }
+                return card;
+        }
+
+        /* =====================================================================
+         *  Item view panel — replaces the entire inventory content when
+         *  viewingItemId is set.
+         * ===================================================================== */
+        function renderItemView(v) {
+                var def = viewingItemId ? setup.items.get(viewingItemId) : null;
+                if (!def) { viewingItemId = null; return null; }
+
+                var equipped = setup.inventory.isEquipped(viewingItemId);
+                var inPack = setup.inventory.has(viewingItemId);
+                var qty = inPack ? setup.inventory.count(viewingItemId) : 0;
+
+                var panel = h("section", { "class": "ui-card inv-itemview" });
+
+                /* Header: Go Back button + title */
+                var head = h("header", { "class": "ui-card__title inv-itemview__head" });
+                var backBtn = actionButton("← Back", function () {
+                        viewingItemId = null;
+                        refresh();
+                }, { compact: true });
+                head.appendChild(backBtn);
+                head.appendChild(h("span", { "class": "inv-itemview__headtitle", text: "Item Details" }));
+                panel.appendChild(head);
+
+                var body = h("div", { "class": "ui-card__body inv-itemview__body" });
+                panel.appendChild(body);
+
+                /* Top section: large image + name/type/tags */
+                var top = h("div", { "class": "inv-itemview__top" });
+                var imgWrap = h("div", { "class": "inv-itemview__imgwrap" });
+                if (def.thumbnail) {
+                        imgWrap.appendChild(h("img", {
+                                src: setup.media.resolve(def.thumbnail),
+                                alt: def.name,
+                                "class": "inv-itemview__img",
+                                draggable: "false"
+                        }));
+                } else {
+                        imgWrap.appendChild(h("span", { "class": "inv-itemview__imgph", text: (def.name || "?").charAt(0) }));
+                }
+                top.appendChild(imgWrap);
+
+                var info = h("div", { "class": "inv-itemview__info" });
+                info.appendChild(h("h3", { "class": "inv-itemview__name", text: def.name }));
+                info.appendChild(h("div", { "class": "inv-itemview__type", text: prettyLabel(def.type || "misc") }));
+                if (def.tags && def.tags.length) {
+                        var tagRow = h("div", { "class": "inv-itemview__tags" });
+                        def.tags.forEach(function (t) {
+                                tagRow.appendChild(h("span", { "class": "inv-detail__tag", text: t }));
+                        });
+                        info.appendChild(tagRow);
+                }
+                if (qty > 1) {
+                        info.appendChild(h("div", { "class": "inv-itemview__qty", text: "Quantity: " + qty }));
+                }
+                top.appendChild(info);
+                body.appendChild(top);
+
+                /* Description */
+                if (def.description) {
+                        body.appendChild(h("div", { "class": "inv-itemview__desc", text: def.description }));
+                }
+
+                /* Equipped status */
+                if (equipped) {
+                        body.appendChild(h("div", {
+                                "class": "inv-itemview__eqtag",
+                                text: "Equipped: " + prettyLabel(setup.inventory.equippedSlot(viewingItemId))
+                        }));
+                }
+
+                /* Action buttons */
+                var actions = h("div", { "class": "inv-itemview__actions" });
+                var ac = def.actions || {};
+                if (ac.use)        actions.appendChild(actionButton("Use",     function () { setup.inventory.use(viewingItemId); },     { compact: true }));
+                if (def.equipable && !equipped) {
+                        actions.appendChild(actionButton("Equip", function () { setup.inventory.equip(viewingItemId); }, { compact: true }));
+                } else if (equipped) {
+                        actions.appendChild(actionButton("Unequip", function () {
+                                setup.inventory.unequip(setup.inventory.equippedSlot(viewingItemId));
+                        }, { compact: true }));
+                }
+                if (ac.transfer) actions.appendChild(actionButton("Transfer", function () {}, { compact: true, disabled: true }));
+                body.appendChild(actions);
+
+                return panel;
+        }
+
+        /* =====================================================================
+         *  <<inventoryView>> macro
+         * ===================================================================== */
+        Macro.add("inventoryView", {
+                handler: function () {
+                        var v = ensureState();
+                        /* If an item view is open, render ONLY the item view
+                         * panel — the grid layout is hidden until the user
+                         * clicks Back or switches tabs. */
+                        if (viewingItemId) {
+                                var panel = renderItemView(v);
+                                if (panel) {
+                                        this.output.appendChild(panel);
+                                        return;
+                                }
+                                /* Fall through if the item no longer exists. */
+                        }
+                        var root = h("div", { "class": "inv" });
+                        root.appendChild(renderInventoryCard(v));
+                        root.appendChild(renderEquippedCard(v));
+                        root.appendChild(renderOutfitCard(v));
+                        this.output.appendChild(root);
+                }
+        });
+})();
+
+:: InventoryStyle [stylesheet]
+/* =========================================================================
+ * Inventory panel — composed from ui-card / ui-action primitives. All
+ * dimensions are multiples of --ui-unit so they scale with the viewport
+ * and the user's UI-scale setting.
+ * ========================================================================= */
+.inv {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        grid-template-rows: 4fr 1fr;
+        gap: calc(var(--ui-unit) * 1);
+        /* Fill the floating-window content area. The window has a fixed
+           height (--fw-height) so this is stable. */
+        height: 100%;
+        min-height: 0;
+}
+.inv-card--items    { grid-column: 1; grid-row: 1; min-height: 0; }
+.inv-card--equipped { grid-column: 2; grid-row: 1 / span 2; min-height: 0; }
+.inv-card--outfits  { grid-column: 1; grid-row: 2; min-height: 0; }
+
+.inv-card {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+}
+.inv-card__body {
+        flex: 1 1 auto;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 0.75);
+        min-height: 0;
+}
+
+/* --- Card header with title + docked input --- */
+.inv-card__head {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        padding: calc(var(--ui-unit) * 0.5) calc(var(--ui-unit) * 1);
+        min-width: 0;
+        overflow: hidden;
+}
+.inv-card__title-text {
+        flex: 0 0 auto;
+        font-size: 90%;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-text-dim);
+}
+.inv-card__head .inv-search {
+        flex: 0 0 calc(var(--ui-unit) * 17.5);
+        margin-left: auto;
+}
+
+/* --- Compact search/select inputs --- */
+.inv-search {
+        box-sizing: border-box;
+        height: calc(var(--ui-unit) * 2.75);
+        padding: 0 calc(var(--ui-unit) * 0.75);
+        background: transparent;
+        color: var(--ui-text);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        font: inherit;
+        font-size: 85%;
+        text-transform: none;
+        text-align: left;
+}
+.inv-search::placeholder { color: var(--ui-text-dim); }
+.inv-search:focus {
+        outline: 1px solid var(--ui-accent);
+        border-color: var(--ui-accent);
+}
+.inv-select {
+        box-sizing: border-box;
+        height: calc(var(--ui-unit) * 2.75);
+        padding: 0 calc(var(--ui-unit) * 0.75);
+        background: transparent;
+        color: var(--ui-text);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        font: inherit;
+        font-size: 85%;
+        cursor: pointer;
+}
+.inv-select:focus { outline: 1px solid var(--ui-accent); border-color: var(--ui-accent); }
+
+/* --- Toolbar: type tabs + sort --- */
+.inv-toolbar {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 0.75);
+        flex: 0 0 auto;
+}
+.inv-tabs {
+        display: flex;
+        gap: calc(var(--ui-unit) * 0.5);
+        flex: 1 1 auto;
+        overflow-x: auto;
+}
+.inv-sort { flex: 0 0 auto; }
+
+/* --- Uniform square cell grid. Cell size = 9u (72px @ 8u unit). --- */
+.inv-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, var(--inv-cell-size));
+        grid-auto-rows: var(--inv-cell-size);
+        gap: calc(var(--ui-unit) * 0.5);
+        overflow-y: auto;
+        align-content: start;
+        flex: 1 1 auto;
+        min-height: 0;
+}
+.inv-grid--equipped {
+        grid-auto-rows: var(--inv-cell-size);
+}
+.inv-grid--outfits {
+        grid-auto-rows: auto;
+        overflow: visible;
+        flex: 0 0 auto;
+}
+
+.inv-cell {
+        position: relative;
+        width: var(--inv-cell-size);
+        height: var(--inv-cell-size);
+        background: var(--ui-bg);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        overflow: hidden;
+        user-select: none;
+}
+.inv-cell:hover {
+        background: var(--ui-hover);
+        border-color: var(--ui-text);
+}
+.inv-cell:focus-visible {
+        outline: 2px solid var(--ui-accent);
+        outline-offset: 1px;
+}
+.inv-cell.is-equipped {
+        border: 1px solid var(--ui-accent);
+}
+.inv-cell.is-empty {
+        cursor: default;
+}
+.inv-cell.is-empty:hover {
+        background: var(--ui-bg);
+        border-color: var(--ui-border);
+}
+.inv-cell__img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        image-rendering: pixelated;
+}
+.inv-cell__ph {
+        color: var(--ui-text-dim);
+        font-size: calc(var(--ui-unit) * 2.75);
+        line-height: 1;
+}
+.inv-cell__qty {
+        position: absolute;
+        top: 1px;
+        right: 2px;
+        font-size: 70%;
+        color: var(--ui-text);
+        background: var(--ui-bg);
+        padding: 0 calc(var(--ui-unit) * 0.375);
+        border-radius: 2px;
+        line-height: 1.3;
+        z-index: 2;
+}
+
+/* --- Hover-revealed action buttons: 2 buttons in a ROW at the BOTTOM --- */
+.inv-cell__hover {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: none;
+        flex-direction: row;
+        gap: calc(var(--ui-unit) * 0.25);
+        padding: calc(var(--ui-unit) * 0.25);
+        box-sizing: border-box;
+        background: linear-gradient(to top, var(--ui-bg) 50%, transparent 100%);
+        z-index: 1;
+}
+.inv-cell:hover .inv-cell__hover,
+.inv-cell:focus-within .inv-cell__hover {
+        display: flex;
+}
+.inv-cell__hover .ui-action {
+        flex: 1 1 0;
+        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 0.5);
+        font-size: 72%;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        line-height: 1.3;
+        min-width: 0;
+        width: auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+}
+
+/* --- Outfit preset wrapper --- */
+.inv-outfit {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: calc(var(--ui-unit) * 0.375);
+        position: relative;
+        width: var(--inv-cell-size);
+}
+.inv-outfit__name {
+        font-size: 70%;
+        color: var(--ui-text-dim);
+        text-align: center;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+}
+.inv-outfit__del {
+        position: absolute;
+        top: calc(var(--ui-unit) * -0.5);
+        right: calc(var(--ui-unit) * -0.5);
+        width: calc(var(--ui-unit) * 2);
+        height: calc(var(--ui-unit) * 2);
+        padding: 0;
+        line-height: 1;
+        font-size: calc(var(--ui-unit) * 1.625);
+        border-radius: 2px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        z-index: 3;
+}
+.inv-cell--outfit { cursor: pointer; }
+
+/* Outfit header save row — compact, fits without overflow. */
+.inv-outfit-saverow {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 0.5);
+        margin-left: auto;
+        flex: 0 0 auto;
+        min-width: 0;
+}
+.inv-outfit-saverow .inv-search { flex: 0 0 calc(var(--ui-unit) * 8.75); min-width: 0; width: calc(var(--ui-unit) * 8.75); }
+.inv-outfit-save-btn {
+        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 0.75);
+        font-size: 75%;
+        flex: 0 0 auto;
+        width: auto;
+        white-space: nowrap;
+}
+
+/* --- Empty-state label --- */
+.inv-empty {
+        color: var(--ui-text-dim);
+        font-style: italic;
+        font-size: 85%;
+        text-align: center;
+        padding: calc(var(--ui-unit) * 1.5) 0;
+}
+
+/* Compact variant of .ui-action. The base .ui-action has width:100% (from
+ * 04-actions.twee, where buttons fill the sidebar); in the inventory's
+ * flex rows we need them to size to content, so we override width:auto. */
+.ui-action--compact {
+        padding: calc(var(--ui-unit) * 0.375) calc(var(--ui-unit) * 1);
+        font-size: 85%;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        flex: 0 0 auto;
+        width: auto;
+        white-space: nowrap;
+}
+
+/* =====================================================================
+ *  Item view panel — replaces the grid layout when an item is opened.
+ *  Fills the entire #fw-content area.
+ * ===================================================================== */
+.inv-itemview {
+        min-height: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+}
+.inv-itemview__head {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        padding: calc(var(--ui-unit) * 0.5) calc(var(--ui-unit) * 1);
+}
+.inv-itemview__headtitle {
+        font-size: 90%;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-text-dim);
+}
+.inv-itemview__body {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 1.5);
+        padding: calc(var(--ui-unit) * 1.5);
+}
+
+/* Top section: large image + info */
+.inv-itemview__top {
+        display: flex;
+        gap: calc(var(--ui-unit) * 1.5);
+        align-items: flex-start;
+}
+.inv-itemview__imgwrap {
+        flex: 0 0 calc(var(--ui-unit) * 15);
+        width: calc(var(--ui-unit) * 15);
+        height: calc(var(--ui-unit) * 15);
+        background: var(--ui-bg);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+}
+.inv-itemview__img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        image-rendering: pixelated;
+}
+.inv-itemview__imgph {
+        color: var(--ui-text-dim);
+        font-size: calc(var(--ui-unit) * 6);
+        line-height: 1;
+}
+.inv-itemview__info {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 0.5);
+        min-width: 0;
+}
+.inv-itemview__name {
+        margin: 0;
+        font-size: 115%;
+        font-weight: bold;
+}
+.inv-itemview__type {
+        font-size: 80%;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-text-dim);
+}
+.inv-itemview__tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: calc(var(--ui-unit) * 0.5);
+        margin-top: calc(var(--ui-unit) * 0.5);
+}
+.inv-itemview__qty {
+        font-size: 85%;
+        color: var(--ui-text-dim);
+        margin-top: calc(var(--ui-unit) * 0.5);
+}
+.inv-detail__tag {
+        font-size: 70%;
+        color: var(--ui-text-dim);
+        background: var(--ui-bg-raised);
+        border: 1px solid var(--ui-border);
+        border-radius: 2px;
+        padding: 0 calc(var(--ui-unit) * 0.625);
+        line-height: 1.4;
+}
+
+.inv-itemview__desc {
+        font-size: 90%;
+        line-height: 1.5;
+        color: var(--ui-text);
+}
+.inv-itemview__eqtag {
+        font-size: 85%;
+        color: var(--ui-accent);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+}
+.inv-itemview__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: calc(var(--ui-unit) * 0.75);
+        margin-top: calc(var(--ui-unit) * 1);
+        padding-top: calc(var(--ui-unit) * 1);
+        border-top: 1px solid var(--ui-border);
+}

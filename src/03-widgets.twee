@@ -28,195 +28,197 @@
  * <<uiRefresh>> or setup.ui.refresh() after changing $vars mid-passage.
  * ========================================================================= */
 (function () {
-	"use strict";
+        "use strict";
 
-	var h = setup.ui.h;
+        var h = setup.ui.h;
 
-	function txt(v) { return v == null ? "" : String(v); }
-	function num(v, fallback) {
-		var n = Number(v);
-		return isNaN(n) ? (fallback || 0) : n;
-	}
-	function fmt(v) {
-		if (typeof v === "number" && !Number.isInteger(v)) return String(Math.round(v * 100) / 100);
-		return txt(v);
-	}
-	function wikifyContents(target, contents) {
-		if (contents && contents.trim()) new Wikifier(target, contents);
-	}
+        function txt(v) { return v == null ? "" : String(v); }
+        function num(v, fallback) {
+                var n = Number(v);
+                return isNaN(n) ? (fallback || 0) : n;
+        }
+        function fmt(v) {
+                if (typeof v === "number" && !Number.isInteger(v)) return String(Math.round(v * 100) / 100);
+                return txt(v);
+        }
+        function wikifyContents(target, contents) {
+                if (contents && contents.trim()) new Wikifier(target, contents);
+        }
 
-	/* --- Containers ------------------------------------------------------ */
+        /* --- Containers ------------------------------------------------------ */
 
-	Macro.add("uiContainer", {
-		tags: [],
-		handler: function () {
-			var id    = txt(this.args[0]);
-			var title = txt(this.args[1]);
-			var el = h("section", { "class": "ui-container" });
-			if (id)    el.setAttribute("data-container", id);
-			if (title) el.appendChild(h("h3", { "class": "ui-container__title" }, title));
-			this.output.appendChild(el);
-			wikifyContents(el, this.payload[0].contents);
-		}
-	});
+        Macro.add("uiContainer", {
+                tags: [],
+                handler: function () {
+                        var id    = txt(this.args[0]);
+                        var title = txt(this.args[1]);
+                        var el = h("section", { "class": "ui-container" });
+                        if (id)    el.setAttribute("data-container", id);
+                        if (title) el.appendChild(h("h3", { "class": "ui-container__title" }, title));
+                        this.output.appendChild(el);
+                        wikifyContents(el, this.payload[0].contents);
+                }
+        });
 
-	Macro.add("uiCard", {
-		tags: [],
-		handler: function () {
-			var title = txt(this.args[0]);
-			var el = h("div", { "class": "ui-card" });
-			if (title) el.appendChild(h("header", { "class": "ui-card__title" }, title));
-			var body = h("div", { "class": "ui-card__body" });
-			el.appendChild(body);
-			this.output.appendChild(el);
-			wikifyContents(body, this.payload[0].contents);
-		}
-	});
+        Macro.add("uiCard", {
+                tags: [],
+                handler: function () {
+                        var title = txt(this.args[0]);
+                        var el = h("div", { "class": "ui-card" });
+                        if (title) el.appendChild(h("header", { "class": "ui-card__title" }, title));
+                        var body = h("div", { "class": "ui-card__body" });
+                        el.appendChild(body);
+                        this.output.appendChild(el);
+                        wikifyContents(body, this.payload[0].contents);
+                }
+        });
 
-	Macro.add("uiRow", {
-		tags: [],
-		handler: function () {
-			var el = h("div", { "class": "ui-row" });
-			this.output.appendChild(el);
-			wikifyContents(el, this.payload[0].contents);
-		}
-	});
+        Macro.add("uiRow", {
+                tags: [],
+                handler: function () {
+                        var el = h("div", { "class": "ui-row" });
+                        this.output.appendChild(el);
+                        wikifyContents(el, this.payload[0].contents);
+                }
+        });
 
-	/* --- Leaf widgets ---------------------------------------------------- */
+        /* --- Leaf widgets ---------------------------------------------------- */
 
-	Macro.add("uiLabel", {
-		handler: function () {
-			this.output.appendChild(h("div", { "class": "ui-label", text: txt(this.args[0]) }));
-		}
-	});
+        Macro.add("uiLabel", {
+                handler: function () {
+                        this.output.appendChild(h("div", { "class": "ui-label", text: txt(this.args[0]) }));
+                }
+        });
 
-	Macro.add("uiValue", {
-		handler: function () {
-			if (this.args.length < 2) return this.error("usage: <<uiValue label value [unit]>>");
-			var unit = txt(this.args[2]);
-			var value = h("span", { "class": "ui-value__value" }, fmt(this.args[1]));
-			if (unit) value.appendChild(h("span", { "class": "ui-value__unit" }, unit));
-			this.output.appendChild(
-				h("div", { "class": "ui-value" },
-					h("span", { "class": "ui-value__label" }, txt(this.args[0])),
-					value)
-			);
-		}
-	});
+        Macro.add("uiValue", {
+                handler: function () {
+                        if (this.args.length < 2) return this.error("usage: <<uiValue label value [unit]>>");
+                        var unit = txt(this.args[2]);
+                        var value = h("span", { "class": "ui-value__value" }, fmt(this.args[1]));
+                        if (unit) value.appendChild(h("span", { "class": "ui-value__unit" }, unit));
+                        this.output.appendChild(
+                                h("div", { "class": "ui-value" },
+                                        h("span", { "class": "ui-value__label" }, txt(this.args[0])),
+                                        value)
+                        );
+                }
+        });
 
-	Macro.add("uiProgress", {
-		handler: function () {
-			if (this.args.length < 3) return this.error("usage: <<uiProgress label value max [color]>>");
-			var max     = num(this.args[2], 100);
-			if (max <= 0) max = 100;
-			var val     = Math.min(Math.max(num(this.args[1], 0), 0), max);
-			var pct     = Math.round((val / max) * 1000) / 10;
-			var shown   = (Math.round(val * 100) / 100) + "/" + (Math.round(max * 100) / 100);
+        Macro.add("uiProgress", {
+                handler: function () {
+                        if (this.args.length < 3) return this.error("usage: <<uiProgress label value max [color]>>");
+                        var max     = num(this.args[2], 100);
+                        if (max <= 0) max = 100;
+                        var val     = Math.min(Math.max(num(this.args[1], 0), 0), max);
+                        var pct     = Math.round((val / max) * 1000) / 10;
+                        var shown   = (Math.round(val * 100) / 100) + "/" + (Math.round(max * 100) / 100);
 
-			var fill = h("div", { "class": "ui-progress__fill" });
-			fill.style.width = pct + "%";
-			if (this.args.length > 3 && txt(this.args[3])) fill.style.background = txt(this.args[3]);
+                        var fill = h("div", { "class": "ui-progress__fill" });
+                        fill.style.width = pct + "%";
+                        if (this.args.length > 3 && txt(this.args[3])) fill.style.background = txt(this.args[3]);
 
-			var el = h("div", { "class": "ui-progress", role: "progressbar" });
-			el.setAttribute("aria-valuemin", "0");
-			el.setAttribute("aria-valuemax", String(max));
-			el.setAttribute("aria-valuenow", String(Math.round(val * 100) / 100));
-			var label = txt(this.args[0]);
-			if (label) el.appendChild(h("span", { "class": "ui-progress__label" }, label));
-			el.appendChild(h("div", { "class": "ui-progress__track" }, fill));
-			el.appendChild(h("span", { "class": "ui-progress__text" }, shown));
-			this.output.appendChild(el);
-		}
-	});
+                        var el = h("div", { "class": "ui-progress", role: "progressbar" });
+                        el.setAttribute("aria-valuemin", "0");
+                        el.setAttribute("aria-valuemax", String(max));
+                        el.setAttribute("aria-valuenow", String(Math.round(val * 100) / 100));
+                        var label = txt(this.args[0]);
+                        if (label) el.appendChild(h("span", { "class": "ui-progress__label" }, label));
+                        el.appendChild(h("div", { "class": "ui-progress__track" }, fill));
+                        el.appendChild(h("span", { "class": "ui-progress__text" }, shown));
+                        this.output.appendChild(el);
+                }
+        });
 
-	Macro.add("uiCheck", {
-		handler: function () {
-			if (this.args.length < 2) return this.error("usage: <<uiCheck label bool>>");
-			var on = !!this.args[1];
-			var el = h("div", {
-				"class": "ui-check" + (on ? " is-checked" : ""),
-				role: "checkbox", tabindex: "-1"
-			});
-			el.setAttribute("aria-checked", on ? "true" : "false");
-			el.setAttribute("aria-readonly", "true");
-			el.appendChild(h("span", { "class": "ui-check__box", "aria-hidden": "true" }));
-			el.appendChild(h("span", { "class": "ui-check__label" }, txt(this.args[0])));
-			this.output.appendChild(el);
-		}
-	});
+        Macro.add("uiCheck", {
+                handler: function () {
+                        if (this.args.length < 2) return this.error("usage: <<uiCheck label bool>>");
+                        var on = !!this.args[1];
+                        var el = h("div", {
+                                "class": "ui-check" + (on ? " is-checked" : ""),
+                                role: "checkbox", tabindex: "-1"
+                        });
+                        el.setAttribute("aria-checked", on ? "true" : "false");
+                        el.setAttribute("aria-readonly", "true");
+                        el.appendChild(h("span", { "class": "ui-check__box", "aria-hidden": "true" }));
+                        el.appendChild(h("span", { "class": "ui-check__label" }, txt(this.args[0])));
+                        this.output.appendChild(el);
+                }
+        });
 
-	Macro.add("uiDivider", {
-		handler: function () {
-			var label = txt(this.args[0]);
-			var el = h("div", { "class": "ui-divider", role: "separator" });
-			if (label) el.appendChild(h("span", { "class": "ui-divider__label" }, label));
-			this.output.appendChild(el);
-		}
-	});
+        Macro.add("uiDivider", {
+                handler: function () {
+                        var label = txt(this.args[0]);
+                        var el = h("div", { "class": "ui-divider", role: "separator" });
+                        if (label) el.appendChild(h("span", { "class": "ui-divider__label" }, label));
+                        this.output.appendChild(el);
+                }
+        });
 
-	Macro.add("uiSpacer", {
-		handler: function () {
-			this.output.appendChild(h("div", { "class": "ui-spacer" }));
-		}
-	});
+        Macro.add("uiSpacer", {
+                handler: function () {
+                        this.output.appendChild(h("div", { "class": "ui-spacer" }));
+                }
+        });
 
-	Macro.add("uiRefresh", {
-		handler: function () {
-			/* Deferred: calling UI.update() synchronously here would re-enter
-			   the very :uiupdate pass that's currently rendering this macro. */
-			setTimeout(function () { setup.ui.refresh(); }, 0);
-		}
-	});
+        Macro.add("uiRefresh", {
+                handler: function () {
+                        /* Deferred: calling UI.update() synchronously here would re-enter
+                           the very :uiupdate pass that's currently rendering this macro. */
+                        setTimeout(function () { setup.ui.refresh(); }, 0);
+                }
+        });
 })();
 
 :: WidgetStyle [stylesheet]
 /* =========================================================================
- * Widget primitives — visual styles. All read-only.
+ * Widget primitives — visual styles. All read-only. All dimensions are
+ * multiples of --ui-unit (defined in 01-shell.twee) so they scale with
+ * the viewport and the user's UI-scale setting.
  * ========================================================================= */
 
 /* --- Containers --- */
-.ui-container { display: flex; flex-direction: column; gap: 6px; }
+.ui-container { display: flex; flex-direction: column; gap: calc(var(--ui-unit) * 0.75); }
 .ui-container__title {
-	margin: 0;
-	font-size: 95%;
-	font-weight: normal;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	color: var(--ui-text-dim);
+        margin: 0;
+        font-size: 95%;
+        font-weight: normal;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-text-dim);
 }
 
 .ui-card {
-	background: var(--ui-bg-raised);
-	border: 1px solid var(--ui-border);
-	border-radius: 4px;
+        background: var(--ui-bg-raised);
+        border: 1px solid var(--ui-border);
+        border-radius: 4px;
 }
 .ui-card__title {
-	padding: 6px 10px;
-	border-bottom: 1px solid var(--ui-border);
-	font-size: 90%;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	color: var(--ui-text-dim);
+        padding: calc(var(--ui-unit) * 0.75) calc(var(--ui-unit) * 1.25);
+        border-bottom: 1px solid var(--ui-border);
+        font-size: 90%;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-text-dim);
 }
 .ui-card__body {
-	padding: 8px 10px;
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
+        padding: calc(var(--ui-unit) * 1) calc(var(--ui-unit) * 1.25);
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 0.75);
 }
 
-.ui-row { display: flex; gap: 6px; }
+.ui-row { display: flex; gap: calc(var(--ui-unit) * 0.75); }
 .ui-row > * { flex: 1 1 0; min-width: 0; }
 
 /* --- Label / value --- */
 .ui-label { line-height: 1.4; }
 
 .ui-value {
-	display: flex;
-	justify-content: space-between;
-	align-items: baseline;
-	gap: 8px;
-	line-height: 1.4;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: calc(var(--ui-unit) * 1);
+        line-height: 1.4;
 }
 .ui-value__label { color: var(--ui-text-dim); }
 .ui-value__value { font-weight: bold; }
@@ -224,25 +226,25 @@
 
 /* --- Progress bar --- */
 .ui-progress {
-	display: grid;
-	grid-template-columns: auto 1fr auto;
-	align-items: center;
-	gap: 8px;
-	line-height: 1.2;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        line-height: 1.2;
 }
 .ui-progress__label { color: var(--ui-text-dim); }
 .ui-progress__track {
-	height: 8px;
-	background: #111;
-	border: 1px solid var(--ui-border);
-	border-radius: 4px;
-	overflow: hidden;
+        height: calc(var(--ui-unit) * 1);
+        background: #111;
+        border: 1px solid var(--ui-border);
+        border-radius: 4px;
+        overflow: hidden;
 }
 .ui-progress__fill {
-	height: 100%;
-	width: 0;
-	background: var(--ui-accent);
-	transition: width 160ms ease-out;
+        height: 100%;
+        width: 0;
+        background: var(--ui-accent);
+        transition: width 160ms ease-out;
 }
 .ui-progress__text { font-size: 85%; color: var(--ui-text-dim); white-space: nowrap; }
 /* No label: let the track span the label column's space naturally. */
@@ -250,48 +252,48 @@
 
 /* --- Read-only checkbox --- */
 .ui-check {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	line-height: 1.3;
-	user-select: none;
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        line-height: 1.3;
+        user-select: none;
 }
 .ui-check__box {
-	flex: 0 0 auto;
-	width: 13px;
-	height: 13px;
-	border: 1px solid var(--ui-border);
-	border-radius: 2px;
-	background: #111;
-	position: relative;
+        flex: 0 0 auto;
+        width: calc(var(--ui-unit) * 1.625);
+        height: calc(var(--ui-unit) * 1.625);
+        border: 1px solid var(--ui-border);
+        border-radius: 2px;
+        background: #111;
+        position: relative;
 }
 .ui-check.is-checked .ui-check__box {
-	background: var(--ui-accent);
-	border-color: var(--ui-accent);
+        background: var(--ui-accent);
+        border-color: var(--ui-accent);
 }
 .ui-check.is-checked .ui-check__box::after {
-	content: "\2713";
-	position: absolute;
-	inset: 0;
-	color: #fff;
-	font-size: 11px;
-	line-height: 13px;
-	text-align: center;
+        content: "\2713";
+        position: absolute;
+        inset: 0;
+        color: #fff;
+        font-size: calc(var(--ui-unit) * 1.375);
+        line-height: calc(var(--ui-unit) * 1.625);
+        text-align: center;
 }
 
 /* --- Divider / spacer --- */
 .ui-divider {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	color: var(--ui-text-dim);
-	font-size: 85%;
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        color: var(--ui-text-dim);
+        font-size: 85%;
 }
 .ui-divider::before,
 .ui-divider::after {
-	content: "";
-	flex: 1;
-	border-top: 1px solid var(--ui-border);
+        content: "";
+        flex: 1;
+        border-top: 1px solid var(--ui-border);
 }
 .ui-divider:empty::before { display: none; }
 

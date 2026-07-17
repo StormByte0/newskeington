@@ -1,0 +1,328 @@
+:: SettingsScript [script]
+/* =========================================================================
+ * Module: settings — granular UI dimension controls.
+ *
+ * Three independent sliders let the player tune the layout:
+ *   1. Master Scale  — scales the shell (window, gaps, typography)
+ *   2. Sidebar Width — scales only the left/right sidebar widths
+ *   3. Cell Size     — scales only the inventory item grid cells
+ *
+ * Draft values are held in module-scope variables until the player clicks
+ * Apply, at which point all three are committed to CSS variables on :root
+ * and persisted to SugarCube Settings. Reset restores all to 100%.
+ *
+ * API:
+ *   setup.settings.applyAll()       commit all draft values to CSS
+ *   setup.settings.resetAll()       reset all drafts to 100% and commit
+ *   setup.settings.getDraft(name)   read draft value (name = "uiScale"|"sidebar"|"cell")
+ *   setup.settings.setDraft(name,v) set draft value (no UI change until Apply)
+ *   setup.settings.getCommitted(name)  read committed value
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        var h = setup.ui.h;
+
+        /* Draft values (slider positions, not yet committed). */
+        var drafts = { uiScale: 100, sidebar: 100, cell: 100 };
+
+        /* Committed values (currently applied to CSS). Fallback when
+           SugarCube Settings API is unavailable. */
+        var committed = { uiScale: 100, sidebar: 100, cell: 100 };
+
+        /* CSS variable name for each setting. */
+        var cssVars = {
+                uiScale: "--ui-scale-mult",
+                sidebar: "--sidebar-mult",
+                cell:    "--cell-mult"
+        };
+
+        setup.settings = {
+                /* Convert integer pct (50–150) to a CSS multiplier. */
+                _toMult: function (pct) {
+                        return (typeof pct === "number" && pct >= 50 && pct <= 150) ? pct / 100 : 1;
+                },
+
+                /* Apply a single setting's committed value to CSS. */
+                _applyOne: function (name) {
+                        var mult = this._toMult(committed[name]);
+                        document.documentElement.style.setProperty(cssVars[name], String(mult));
+                },
+
+                /* Apply all committed values to CSS. */
+                applyAll: function () {
+                        this._applyOne("uiScale");
+                        this._applyOne("sidebar");
+                        this._applyOne("cell");
+                },
+
+                /* Read committed value. Tries Settings API, falls back
+                   to module-scope committed. */
+                getCommitted: function (name) {
+                        try {
+                                if (typeof Settings !== "undefined" && Settings != null) {
+                                        var v = Settings[name];
+                                        if (typeof v === "number" && v >= 50 && v <= 150) return v;
+                                }
+                        } catch (e) { /* Settings not ready */ }
+                        return committed[name];
+                },
+
+                /* Read draft value. */
+                getDraft: function (name) { return drafts[name]; },
+
+                /* Set draft value (no UI change until commit). */
+                setDraft: function (name, pct) {
+                        drafts[name] = (typeof pct === "number" && pct >= 50 && pct <= 150) ? pct : 100;
+                },
+
+                /* Commit all drafts: persist to Settings + apply to CSS +
+                   refresh the UI. */
+                commitAll: function () {
+                        ["uiScale", "sidebar", "cell"].forEach(function (name) {
+                                committed[name] = drafts[name];
+                                try {
+                                        if (typeof Settings !== "undefined") {
+                                                Settings[name] = drafts[name];
+                                        }
+                                } catch (e) { /* ignore */ }
+                        });
+                        this.applyAll();
+                        setup.ui.refresh();
+                },
+
+                /* Reset all to 100%: update drafts + commit. */
+                resetAll: function () {
+                        drafts.uiScale = 100;
+                        drafts.sidebar = 100;
+                        drafts.cell = 100;
+                        this.commitAll();
+                }
+        };
+
+        /* Register settings with SugarCube for save/load persistence. */
+        jQuery(document).one(":storyready", function () {
+                if (typeof Setting !== "undefined" && typeof Setting.addList === "function") {
+                        var values = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150];
+                        ["uiScale", "sidebar", "cell"].forEach(function (name) {
+                                try {
+                                        Setting.addList(name, {
+                                                label: "", desc: "", list: values, "default": 100
+                                        });
+                                } catch (e) { /* already registered */ }
+                        });
+                }
+                /* Sync drafts + committed to saved values on load. */
+                ["uiScale", "sidebar", "cell"].forEach(function (name) {
+                        var v = setup.settings.getCommitted(name);
+                        drafts[name] = v;
+                        committed[name] = v;
+                });
+                setup.settings.applyAll();
+        });
+
+        /* Re-apply on save load / restart. */
+        jQuery(document).on(":uiupdate", function () {
+                try {
+                        ["uiScale", "sidebar", "cell"].forEach(function (name) {
+                                var v = setup.settings.getCommitted(name);
+                                committed[name] = v;
+                        });
+                        setup.settings.applyAll();
+                } catch (e) {
+                        setup.settings.applyAll();
+                }
+        });
+
+        /* Override the "settings" action to open our custom settings tab. */
+        setup.actions.register("settings", {
+                label: "Settings", icon: "\uF013",
+                handler: function () {
+                        /* Sync drafts to committed values when opening. */
+                        drafts.uiScale = setup.settings.getCommitted("uiScale");
+                        drafts.sidebar = setup.settings.getCommitted("sidebar");
+                        drafts.cell = setup.settings.getCommitted("cell");
+                        setup.ui.openWindow("settings");
+                }
+        });
+
+        /* Register a "settings" tab in the floating window. */
+        jQuery(document).one(":storyready", function () {
+                setup.ui.registerTab({
+                        id: "settings",
+                        title: "Settings",
+                        passage: "Settings"
+                });
+        });
+
+        /* =====================================================================
+         *  <<settingsPanel>> macro — renders the custom settings UI.
+         *
+         *  Three sliders + a single Apply + Reset at the bottom.
+         * ===================================================================== */
+        Macro.add("settingsPanel", {
+                handler: function () {
+                        var self = this;
+                        var root = h("div", { "class": "settings-panel" });
+
+                        var card = h("section", { "class": "ui-card settings-card" });
+                        card.appendChild(h("header", { "class": "ui-card__title" }, "Display"));
+                        var body = h("div", { "class": "ui-card__body" });
+                        card.appendChild(body);
+
+                        /* Helper to build a slider row. */
+                        function sliderRow(name, label, desc) {
+                                var row = h("div", { "class": "settings-row" });
+                                var labelCol = h("div", { "class": "settings-row__label" });
+                                labelCol.appendChild(h("div", { "class": "settings-row__name", text: label }));
+                                labelCol.appendChild(h("div", { "class": "settings-row__desc", text: desc }));
+                                row.appendChild(labelCol);
+
+                                var ctrlCol = h("div", { "class": "settings-row__ctrl" });
+                                var slider = h("input", {
+                                        type: "range",
+                                        "class": "settings-slider",
+                                        "data-setting": name,
+                                        min: "50", max: "150", step: "5",
+                                        value: String(drafts[name])
+                                });
+                                var valLabel = h("span", {
+                                        "class": "settings-slider__value",
+                                        "data-setting-val": name,
+                                        text: drafts[name] + "%"
+                                });
+                                slider.addEventListener("input", function () {
+                                        var v = parseInt(slider.value, 10);
+                                        setup.settings.setDraft(name, v);
+                                        valLabel.textContent = v + "%";
+                                });
+                                ctrlCol.appendChild(slider);
+                                ctrlCol.appendChild(valLabel);
+                                row.appendChild(ctrlCol);
+                                return row;
+                        }
+
+                        body.appendChild(sliderRow("uiScale", "Master Scale",
+                                "Scales the entire interface — window, gaps, and typography."));
+                        body.appendChild(sliderRow("sidebar", "Sidebar Width",
+                                "Scales only the left and right sidebar widths."));
+                        body.appendChild(sliderRow("cell", "Cell Size",
+                                "Scales only the inventory item grid cells."));
+
+                        /* Action buttons at the bottom. */
+                        var actions = h("div", { "class": "settings-actions" });
+                        var applyBtn = h("button", {
+                                type: "button",
+                                "class": "ui-action settings-actions__btn",
+                                title: "Apply all changes"
+                        }, "Apply");
+                        applyBtn.addEventListener("click", function () {
+                                setup.settings.commitAll();
+                        });
+                        var resetBtn = h("button", {
+                                type: "button",
+                                "class": "ui-action settings-actions__btn",
+                                title: "Reset all to 100%"
+                        }, "Reset");
+                        resetBtn.addEventListener("click", function () {
+                                setup.settings.resetAll();
+                                /* Update slider positions + labels to reflect reset. */
+                                root.querySelectorAll(".settings-slider").forEach(function (sl) {
+                                        sl.value = "100";
+                                });
+                                root.querySelectorAll(".settings-slider__value").forEach(function (vl) {
+                                        vl.textContent = "100%";
+                                });
+                        });
+                        actions.appendChild(applyBtn);
+                        actions.appendChild(resetBtn);
+                        body.appendChild(actions);
+
+                        root.appendChild(card);
+                        this.output.appendChild(root);
+                }
+        });
+})();
+
+:: Settings [nobr]
+/%
+        Custom settings tab — rendered into the floating window when the
+        Settings button is clicked. Uses the <<settingsPanel>> macro to
+        render three sliders (Master Scale, Sidebar Width, Cell Size) with
+        a single Apply + Reset at the bottom.
+%/
+<<settingsPanel>>
+
+:: SettingsStyle [stylesheet]
+/* =========================================================================
+ * Settings panel — uses ui-card / ui-action primitives. Dimensions are
+ * multiples of --ui-unit.
+ * ========================================================================= */
+.settings-panel {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 1);
+        height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+}
+
+.settings-card { flex: 0 0 auto; }
+
+.settings-row {
+        display: flex;
+        gap: calc(var(--ui-unit) * 1.5);
+        align-items: flex-start;
+        padding: calc(var(--ui-unit) * 0.75) 0;
+        border-bottom: 1px solid var(--ui-border);
+}
+.settings-row:last-of-type { border-bottom: none; }
+
+.settings-row__label {
+        flex: 1 1 auto;
+        min-width: 0;
+}
+.settings-row__name {
+        font-weight: bold;
+        font-size: 95%;
+        margin-bottom: calc(var(--ui-unit) * 0.25);
+}
+.settings-row__desc {
+        font-size: 85%;
+        color: var(--ui-text-dim);
+        line-height: 1.4;
+}
+.settings-row__ctrl {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: calc(var(--ui-unit) * 0.5);
+}
+
+.settings-slider {
+        width: calc(var(--ui-unit) * 30);
+        height: calc(var(--ui-unit) * 2);
+        cursor: pointer;
+        accent-color: var(--ui-accent);
+}
+.settings-slider__value {
+        font-size: 90%;
+        font-weight: bold;
+        color: var(--ui-text);
+        min-width: calc(var(--ui-unit) * 6);
+        text-align: right;
+}
+
+.settings-actions {
+        display: flex;
+        gap: calc(var(--ui-unit) * 0.75);
+        margin-top: calc(var(--ui-unit) * 1.5);
+        padding-top: calc(var(--ui-unit) * 1.5);
+        border-top: 1px solid var(--ui-border);
+}
+.settings-actions__btn {
+        flex: 0 0 auto;
+        width: auto;
+        padding: calc(var(--ui-unit) * 0.625) calc(var(--ui-unit) * 2);
+}

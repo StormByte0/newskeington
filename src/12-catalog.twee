@@ -1,0 +1,316 @@
+:: ItemCatalog [script]
+/* =========================================================================
+ * Sample item catalog.
+ *
+ * Each call to setup.items.register(id, def) adds an item to the static
+ * catalog. The catalog is read at render time by <<inventoryView>>; the
+ * state ($inventory / $equipped) only stores item ids.
+ *
+ * Equipable apparel items drive the avatar: def.avatarLayer names one of
+ * the layers configured in 06-avatar.twee. When equipped, the layer is
+ * set to def.avatarImage; when unequipped, the layer is cleared.
+ *
+ * onUse / onEquip / onUnequip receive { item, state } where state is the
+ * live State.variables object — mutate it directly to update stats.
+ *
+ * Item tags (def.tags) feed the multi-select tag filter in the inventory
+ * panel. They are free-form strings; pick whatever vocabulary your game
+ * uses (rarity, school of magic, material, function, …).
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        /* --- Consumables ---------------------------------------------------- */
+        setup.items.register("potion_health", {
+                name: "Health Potion",
+                description: "Restores 50 HP. Fizzy, red, vaguely cherry-flavoured.",
+                type: "consumable",
+                tags: ["healing", "common"],
+                thumbnail: "potion_health",
+                consumable: true,
+                actions: { use: true, transfer: false },
+                onUse: function (ctx) {
+                        var v = ctx.state;
+                        v.hp = Math.min((v.hp || 0) + 50, v.maxhp || 100);
+                }
+        });
+
+        setup.items.register("potion_mana", {
+                name: "Mana Potion",
+                description: "Restores 30 MP. Tastes like blue.",
+                type: "consumable",
+                tags: ["healing", "magic", "common"],
+                thumbnail: "potion_mana",
+                consumable: true,
+                actions: { use: true },
+                onUse: function (ctx) {
+                        var v = ctx.state;
+                        v.mp = Math.min((v.mp || 0) + 30, v.maxmp || 40);
+                }
+        });
+
+        setup.items.register("bread_loaf", {
+                name: "Loaf of Bread",
+                description: "Heals 10 HP. Plain but filling.",
+                type: "consumable",
+                tags: ["healing", "food", "common"],
+                thumbnail: "bread_loaf",
+                consumable: true,
+                actions: { use: true },
+                onUse: function (ctx) {
+                        var v = ctx.state;
+                        v.hp = Math.min((v.hp || 0) + 10, v.maxhp || 100);
+                }
+        });
+
+        /* --- Apparel (equipable; drives avatar layers) --------------------- */
+        setup.items.register("tunic_cloth", {
+                name: "Cloth Tunic",
+                description: "A simple peasant tunic. Better than nothing.",
+                type: "apparel",
+                tags: ["clothing", "common"],
+                thumbnail: "tunic_cloth",
+                equipable: true,
+                equipSlot: "apparel_top",
+                avatarLayer: "apparel_top",
+                avatarImage: "tunic_cloth",
+                actions: {  },
+                onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 5;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
+                onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 5;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
+        });
+
+        setup.items.register("armor_leather", {
+                name: "Leather Armor",
+                description: "Sturdy boiled-leather cuirass. +15 Max HP.",
+                type: "apparel",
+                tags: ["clothing", "combat", "uncommon"],
+                thumbnail: "armor_leather",
+                equipable: true,
+                equipSlot: "apparel_top",
+                avatarLayer: "apparel_top",
+                avatarImage: "armor_leather",
+                actions: {  },
+                onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 15; ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
+                onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 15; ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
+        });
+
+        setup.items.register("trousers_linen", {
+                name: "Linen Trousers",
+                description: "Plain linen trousers. +2 Max HP.",
+                type: "apparel",
+                tags: ["clothing", "common"],
+                thumbnail: "trousers_linen",
+                equipable: true,
+                equipSlot: "apparel_bottom",
+                avatarLayer: "apparel_bottom",
+                avatarImage: "trousers_linen",
+                actions: {  },
+                onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 2;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
+                onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 2;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
+        });
+
+        setup.items.register("boots_leather", {
+                name: "Leather Boots",
+                description: "Well-worn travelling boots.",
+                type: "apparel",
+                tags: ["clothing", "common"],
+                thumbnail: "boots_leather",
+                equipable: true,
+                equipSlot: "apparel_bottom",
+                avatarLayer: "apparel_bottom",
+                avatarImage: "boots_leather",
+                actions: {  }
+        });
+
+        setup.items.register("hat_wide", {
+                name: "Wide-Brimmed Hat",
+                description: "Keeps the sun off. Slightly mysterious.",
+                type: "apparel",
+                tags: ["clothing", "accessory", "uncommon"],
+                thumbnail: "hat_wide",
+                equipable: true,
+                equipSlot: "accessory",
+                avatarLayer: "accessory",
+                avatarImage: "hat_wide",
+                actions: {  }
+        });
+
+        /* --- Weapons -------------------------------------------------------- */
+        setup.items.register("sword_iron", {
+                name: "Iron Sword",
+                description: "A serviceable iron sword. +5 attack while equipped.",
+                type: "weapon",
+                tags: ["combat", "metal", "common"],
+                thumbnail: "sword_iron",
+                equipable: true,
+                equipSlot: "weapon",
+                /* No avatarLayer — weapons don't render on the portrait by
+                   default; reconfigure setup.avatar.layers to add one. */
+                actions: {  },
+                onEquip:   function (ctx) { ctx.state.attack = (ctx.state.attack || 0) + 5; },
+                onUnequip: function (ctx) { ctx.state.attack = (ctx.state.attack || 0) - 5; }
+        });
+
+        setup.items.register("dagger_rusty", {
+                name: "Rusty Dagger",
+                description: "Pitted and dull, but it'll do. +1 attack.",
+                type: "weapon",
+                tags: ["combat", "metal", "common"],
+                thumbnail: "dagger_rusty",
+                equipable: true,
+                equipSlot: "weapon",
+                actions: {  },
+                onEquip:   function (ctx) { ctx.state.attack = (ctx.state.attack || 0) + 1; },
+                onUnequip: function (ctx) { ctx.state.attack = (ctx.state.attack || 0) - 1; }
+        });
+
+        /* --- Key items (no use/equip; view only) ------------------------ */
+        setup.items.register("town_map", {
+                name: "Town Map",
+                description: "A hand-drawn map of the nearby town.",
+                type: "key_item",
+                tags: ["quest", "common"],
+                thumbnail: "town_map",
+                actions: {  }
+        });
+
+        setup.items.register("magic_map", {
+                name: "Magic Map",
+                description: "A shimmering parchment that reveals hidden paths. The cartographer's prize.",
+                type: "key_item",
+                tags: ["quest", "magic", "rare"],
+                thumbnail: "magic_map",
+                actions: {  }
+        });
+
+        setup.items.register("amulet_strange", {
+                name: "Strange Amulet",
+                description: "Pulses faintly when held. You don't know what it does yet.",
+                type: "key_item",
+                tags: ["magic", "mystery", "rare"],
+                thumbnail: "amulet_strange",
+                actions: {  }
+        });
+})();
+
+:: QuestCatalog [script]
+/* =========================================================================
+ * Sample quest catalog.
+ *
+ * Subquest status functions read State.variables and return one of:
+ *   "not_started" | "in_progress" | "completed" | "failed"
+ *
+ * The quest's overall status is derived: completed if in $quests.completed,
+ * failed if any subquest fails, otherwise active.
+ *
+ * Start a quest from any passage with <<questStart "id">> and complete it
+ * with <<questComplete "id">>.
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        setup.quests.register("awaken_strange_land", {
+                title: "Awaken in a Strange Land",
+                description: "You woke up face-down in a field that definitely isn't yours. Figure out where you are and how to get home.",
+                subquests: [
+                        {
+                                id: "look_around",
+                                title: "Take stock of your surroundings",
+                                status: function () {
+                                        return State.variables.lookedAround ? "completed" : "in_progress";
+                                }
+                        },
+                        {
+                                id: "find_civilization",
+                                title: "Find signs of civilization",
+                                status: function () {
+                                        var v = State.variables;
+                                        if (v.foundTown) return "completed";
+                                        if (v.lookedAround) return "in_progress";
+                                        return "not_started";
+                                }
+                        },
+                        {
+                                id: "learn_world_name",
+                                title: "Learn the name of this world",
+                                status: function () {
+                                        var v = State.variables;
+                                        if (v.knowsWorldName) return "completed";
+                                        if (v.foundTown) return "in_progress";
+                                        return "not_started";
+                                }
+                        }
+                ],
+                onComplete: function (state) {
+                        state.gold = (state.gold || 0) + 50;
+                }
+        });
+
+        setup.quests.register("find_magic_map", {
+                title: "The Cartographer's Debt",
+                description: "A wandering cartographer mentioned a magic map that shows the way home — but a merchant in town owes him money and won't hand it over until the debt is paid.",
+                subquests: [
+                        {
+                                id: "talk_merchant",
+                                title: "Speak with the merchant",
+                                status: function () {
+                                        return State.variables.askedMerchant ? "completed" : "not_started";
+                                }
+                        },
+                        {
+                                id: "settle_debt",
+                                title: "Settle the merchant's debt (50g)",
+                                status: function () {
+                                        var v = State.variables;
+                                        if (v.debtPaid) return "completed";
+                                        if (v.askedMerchant) return "in_progress";
+                                        return "not_started";
+                                }
+                        },
+                        {
+                                id: "retrieve_map",
+                                title: "Retrieve the magic map",
+                                status: function () {
+                                        var v = State.variables;
+                                        if (v.hasMagicMap) return "completed";
+                                        if (v.debtPaid) return "in_progress";
+                                        return "not_started";
+                                }
+                        }
+                ],
+                onComplete: function (state) {
+                        state.gold = (state.gold || 0) + 20;
+                }
+        });
+
+        setup.quests.register("escape_this_world", {
+                title: "Escape This World",
+                description: "With the magic map in hand, the way home may finally be within reach.",
+                subquests: [
+                        {
+                                id: "find_portal",
+                                title: "Locate the portal the map reveals",
+                                status: function () {
+                                        return State.variables.foundPortal ? "completed" : "not_started";
+                                }
+                        },
+                        {
+                                id: "open_portal",
+                                title: "Open the portal",
+                                status: function () {
+                                        var v = State.variables;
+                                        if (v.portalOpen) return "completed";
+                                        if (v.foundPortal) return "in_progress";
+                                        return "not_started";
+                                }
+                        },
+                        {
+                                id: "step_through",
+                                title: "Step through to your own world",
+                                status: function () {
+                                        return State.variables.escaped ? "completed" : "not_started";
+                                }
+                        }
+                ]
+        });
+})();

@@ -1,32 +1,32 @@
 :: StoryInterface
 <div id="app-shell" class="app-shell">
-	<!-- Region 1: Left sidebar — app controls (buttons) + info widgets.
-	     Populated by the PanelLeft passage via SugarCube's native
-	     data-passage mechanism: re-rendered on every passage display and
-	     on every UI.update() call. -->
-	<aside id="left-sidebar" class="sidebar sidebar--left" data-passage="PanelLeft"></aside>
+        <!-- Region 1: Left sidebar — app controls (buttons) + info widgets.
+             Populated by the PanelLeft passage via SugarCube's native
+             data-passage mechanism: re-rendered on every passage display and
+             on every UI.update() call. -->
+        <aside id="left-sidebar" class="sidebar sidebar--left" data-passage="PanelLeft"></aside>
 
-	<!-- Regions 2 + 3: Main area -->
-	<main id="main-area" class="main-area">
-		<!-- Region 2: Scene canvas. Layers are created/managed by the
-		     scene module (50-scene.twee) — this element stays empty. -->
-		<div id="scene-canvas" class="scene-canvas"></div>
+        <!-- Regions 2 + 3: Main area -->
+        <main id="main-area" class="main-area">
+                <!-- Region 2: Scene canvas. Layers are created/managed by the
+                     scene module (50-scene.twee) — this element stays empty. -->
+                <div id="scene-canvas" class="scene-canvas"></div>
 
-		<!-- Region 3: Story content (owned by SugarCube's engine) -->
-		<div id="passages" class="story-content"></div>
-	</main>
+                <!-- Region 3: Story content (owned by SugarCube's engine) -->
+                <div id="passages" class="story-content"></div>
+        </main>
 
-	<!-- Region 4: Right sidebar — populated by the PanelRight passage. -->
-	<aside id="right-sidebar" class="sidebar sidebar--right" data-passage="PanelRight"></aside>
+        <!-- Region 4: Right sidebar — populated by the PanelRight passage. -->
+        <aside id="right-sidebar" class="sidebar sidebar--right" data-passage="PanelRight"></aside>
 
-	<!-- Region 5: Floating window (tabbed; inventory, quests, …) -->
-	<div id="floating-window" class="floating-window" aria-hidden="true">
-		<header class="floating-window__header">
-			<nav id="fw-tabs" class="floating-window__tabs"></nav>
-			<button id="fw-close" class="floating-window__close" type="button" aria-label="Close">&times;</button>
-		</header>
-		<div id="fw-content" class="floating-window__content"></div>
-	</div>
+        <!-- Region 5: Floating window (tabbed; inventory, quests, …) -->
+        <div id="floating-window" class="floating-window" aria-hidden="true">
+                <header class="floating-window__header">
+                        <nav id="fw-tabs" class="floating-window__tabs"></nav>
+                        <button id="fw-close" class="floating-window__close" type="button" aria-label="Close">&times;</button>
+                </header>
+                <div id="fw-content" class="floating-window__content"></div>
+        </div>
 </div>
 
 :: ShellStyle [stylesheet]
@@ -35,155 +35,209 @@
  * produced by macros (see 30-widgets / 40-actions / 50-scene / 60-avatar).
  * ========================================================================= */
 :root {
-	/* Dimensions */
-	--left-sidebar-width:  230px;
-	--right-sidebar-width: 250px;
-	--scene-height:        46vh;
-	--sidebar-pad:         10px;
-	--story-pad:           14px;
-	--fw-width:            620px;
-	--fw-max-width:        88%;
-	--fw-max-height:       85%;
+        /* =================================================================
+         *  SPACING SYSTEM
+         *
+         *  Three independent knobs let the player tune the layout:
+         *
+         *  1. --ui-scale-mult  Master shell scale (0.75–1.5). Scales the
+         *     base --ui-unit, which drives the floating window, scene
+         *     height, story padding, and all gaps/typography.
+         *
+         *  2. --sidebar-mult   Sidebar width multiplier (0.75–1.5). Scales
+         *     only the left and right sidebar widths independently of the
+         *     shell, so players on ultra-wide screens can widen the
+         *     sidebars without making the window huge.
+         *
+         *  3. --cell-mult      Inventory cell size multiplier (0.75–1.5).
+         *     Scales only the item grid cells, so players can make cells
+         *     bigger/smaller without affecting the window or sidebars.
+         *
+         *  --ui-unit is computed so that the floating window (90u × 70u)
+         *  fits within the story column (viewport minus both sidebars)
+         *  with margin. See the formula below. All three multipliers
+         *  default to 1 and are set by the Settings dialog.               */
+        --ui-scale-mult:  1;
+        --sidebar-mult:   1;
+        --cell-mult:      1;
 
-	/* Palette (matches SugarCube's default dark UI) */
-	--ui-bg:        #222;
-	--ui-bg-raised: #2b2b2b;
-	--ui-border:    #444;
-	--ui-text:      #eee;
-	--ui-text-dim:  #aaa;
-	--ui-hover:     #444;
-	--ui-accent:    #4da3ff;
+        /* Base unit — drives shell dimensions. The horizontal budget is:
+             90u (window) + 23u*sidebar (left) + 25u*sidebar (right) = (90 + 48*sidebar)u
+           must fit in 100vw with margin. We use 100vw / (90 + 48*sidebar + 10)
+           to leave ~7% margin. Vertically, 70u must fit in 100vh with room.
+           14px cap prevents over-scaling; 5px floor prevents under-scaling. */
+        --ui-unit: max(5px, min(
+                calc(100vw / (90 + 48 * var(--sidebar-mult) + 10)),
+                calc(100vh / 76),
+                14px
+        ) * var(--ui-scale-mult));
+
+        /* Layout dimensions. Sidebar widths have their own multiplier so
+           they can be tuned independently. */
+        --left-sidebar-width:  calc(var(--ui-unit) * 23 * var(--sidebar-mult));
+        --right-sidebar-width: calc(var(--ui-unit) * 25 * var(--sidebar-mult));
+        --scene-height:        18vh;  /* Fixed 18% of viewport height */
+        --sidebar-pad:         calc(var(--ui-unit) * 1.25);
+        --story-pad:           calc(var(--ui-unit) * 1.75);
+
+        /* Floating window — 90u × 70u = 720×560 at 8px unit. */
+        --fw-width:            calc(var(--ui-unit) * 90);
+        --fw-height:           calc(var(--ui-unit) * 70);
+
+        /* Inventory cell size — independent multiplier. Base 9u. */
+        --inv-cell-size:       calc(var(--ui-unit) * 9 * var(--cell-mult));
+
+        /* Palette (matches SugarCube's default dark UI) */
+        --ui-bg:        #222;
+        --ui-bg-raised: #2b2b2b;
+        --ui-border:    #444;
+        --ui-text:      #eee;
+        --ui-text-dim:  #aaa;
+        --ui-hover:     #444;
+        --ui-accent:    #4da3ff;
 }
 
 html, body {
-	height: 100%;
-	margin: 0;
-	overflow: hidden;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
 }
 
 .app-shell {
-	display: grid;
-	grid-template-columns: var(--left-sidebar-width) 1fr var(--right-sidebar-width);
-	height: 100vh;
+        display: grid;
+        grid-template-columns: var(--left-sidebar-width) 1fr var(--right-sidebar-width);
+        height: 100vh;
 }
 
 /* --- Regions 1 / 4: Sidebars ---
    Flex columns so <<uiSpacer>> can pin trailing content to the bottom.
    Children are generated by the widget macros in the panel passages. */
 .sidebar {
-	box-sizing: border-box;
-	overflow-y: auto;
-	padding: var(--sidebar-pad);
-	background: var(--ui-bg);
-	color: var(--ui-text);
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+        box-sizing: border-box;
+        overflow-y: auto;
+        padding: var(--sidebar-pad);
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 1);
 }
 .sidebar--left  { border-right: 1px solid var(--ui-border); }
 .sidebar--right { border-left:  1px solid var(--ui-border); }
 
 /* Story title block (rendered by PanelLeft) */
 #story-title {
-	margin: 4px 0 2px;
-	font-size: 150%;
-	line-height: 1.2;
-	text-align: center;
+        margin: 4px 0 2px;
+        font-size: 150%;
+        line-height: 1.2;
+        text-align: center;
 }
 
 /* --- Regions 2 / 3: Main area --- */
 .main-area {
-	position: relative;
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-	overflow: hidden;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
 }
 
 .scene-canvas {
-	position: relative;
-	flex: 0 0 var(--scene-height);
-	overflow: hidden;
-	border-bottom: 1px solid var(--ui-border);
-	background: #000;
+        position: relative;
+        flex: 0 0 var(--scene-height);
+        overflow: hidden;
+        border-bottom: 1px solid var(--ui-border);
+        background: #000;
 }
 
 .story-content {
-	flex: 1 1 auto;
-	overflow-y: auto;
-	padding: var(--story-pad);
-	box-sizing: border-box;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: var(--story-pad);
+        box-sizing: border-box;
 }
 
 /* Passage card */
 #passages .passage {
-	background: var(--ui-bg);
-	border: 1px solid var(--ui-border);
-	border-radius: 4px;
-	padding: 16px;
-	margin: 4px;
+        background: var(--ui-bg);
+        border: 1px solid var(--ui-border);
+        border-radius: 4px;
+        padding: calc(var(--ui-unit) * 2);
+        margin: calc(var(--ui-unit) * 0.5);
 }
 
-/* --- Region 5: Floating window chrome --- */
+/* When the floating window is open, the passage area is non-interactive
+   and dimmed so the player can't click story links while managing their
+   inventory or quests. The sidebars (avatar, stats, buttons) stay fully
+   interactive. */
+body.fw-open #passages {
+        pointer-events: none;
+        opacity: 0.3;
+        transition: opacity 200ms ease;
+}
+
+/* --- Region 5: Floating window chrome ---
+   Fixed dimensions derived from --ui-unit (scales with viewport + user
+   setting). The window stays the same size regardless of content. */
 .floating-window {
-	position: absolute;
-	top: 50%;
-	left: 50%;
-	transform: translate(-50%, -50%);
-	width: var(--fw-width);
-	max-width: var(--fw-max-width);
-	max-height: var(--fw-max-height);
-	display: none;
-	flex-direction: column;
-	z-index: 100;
-	overflow: hidden;
-	background: var(--ui-bg);
-	border: 1px solid var(--ui-border);
-	border-radius: 4px;
-	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: var(--fw-width);
+        height: var(--fw-height);
+        transform: translate(-50%, -50%);
+        display: none;
+        flex-direction: column;
+        z-index: 100;
+        overflow: hidden;
+        background: var(--ui-bg);
+        border: 1px solid var(--ui-border);
+        border-radius: 4px;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 .floating-window.is-open { display: flex; }
 
 .floating-window__header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 6px 8px;
-	border-bottom: 1px solid var(--ui-border);
+        display: flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 1);
+        padding: calc(var(--ui-unit) * 0.75) calc(var(--ui-unit) * 1);
+        border-bottom: 1px solid var(--ui-border);
 }
 
 .floating-window__tabs {
-	display: flex;
-	gap: 4px;
-	flex: 1;
+        display: flex;
+        gap: calc(var(--ui-unit) * 0.5);
+        flex: 1;
 }
 
 .fw-tab {
-	color: var(--ui-text);
-	background: transparent;
-	border: 1px solid var(--ui-border);
-	padding: 2px 10px;
-	cursor: pointer;
+        color: var(--ui-text);
+        background: transparent;
+        border: 1px solid var(--ui-border);
+        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 1.25);
+        cursor: pointer;
+        font: inherit;
 }
 .fw-tab:hover { background: var(--ui-hover); }
 .fw-tab.is-active {
-	background: var(--ui-hover);
-	border-color: #666;
+        background: var(--ui-hover);
+        border-color: #666;
 }
 
 .floating-window__close {
-	flex: 0 0 auto;
-	color: var(--ui-text);
-	background: transparent;
-	border: 1px solid var(--ui-border);
-	cursor: pointer;
-	line-height: 1;
-	padding: 2px 8px;
+        flex: 0 0 auto;
+        color: var(--ui-text);
+        background: transparent;
+        border: 1px solid var(--ui-border);
+        cursor: pointer;
+        line-height: 1;
+        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 1);
 }
 .floating-window__close:hover { background: var(--ui-hover); }
 
 .floating-window__content {
-	padding: 10px;
-	overflow-y: auto;
-	flex: 1;
+        padding: calc(var(--ui-unit) * 1.25);
+        overflow-y: auto;
+        flex: 1;
 }

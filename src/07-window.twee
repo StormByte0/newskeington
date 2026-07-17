@@ -12,111 +12,113 @@
  * inventory/quests buttons need.
  * ========================================================================= */
 (function () {
-	"use strict";
+        "use strict";
 
-	var els = {};
-	var activeTab = null;
-	var isOpen = false;
+        var els = {};
+        var activeTab = null;
+        var isOpen = false;
 
-	setup.ui.tabs = [];
+        setup.ui.tabs = [];
 
-	function findTab(id) {
-		for (var i = 0; i < setup.ui.tabs.length; i++) {
-			if (setup.ui.tabs[i].id === id) return setup.ui.tabs[i];
-		}
-		return null;
-	}
+        function findTab(id) {
+                for (var i = 0; i < setup.ui.tabs.length; i++) {
+                        if (setup.ui.tabs[i].id === id) return setup.ui.tabs[i];
+                }
+                return null;
+        }
 
-	function renderTabBar() {
-		els.fwTabs.textContent = "";
-		setup.ui.tabs.forEach(function (tab) {
-			var btn = document.createElement("button");
-			btn.type = "button";
-			btn.className = "fw-tab" + (tab.id === activeTab ? " is-active" : "");
-			btn.textContent = tab.title;
-			btn.addEventListener("click", function () { setup.ui.switchTab(tab.id); });
-			els.fwTabs.appendChild(btn);
-		});
-	}
+        function renderTabBar() {
+                els.fwTabs.textContent = "";
+                setup.ui.tabs.forEach(function (tab) {
+                        var btn = document.createElement("button");
+                        btn.type = "button";
+                        btn.className = "fw-tab" + (tab.id === activeTab ? " is-active" : "");
+                        btn.textContent = tab.title;
+                        btn.addEventListener("click", function () { setup.ui.switchTab(tab.id); });
+                        els.fwTabs.appendChild(btn);
+                });
+        }
 
-	function renderActiveTab() {
-		els.fwContent.textContent = "";
-		var tab = findTab(activeTab);
-		if (tab && tab.passage && Story.has(tab.passage)) {
-			new Wikifier(els.fwContent, Story.get(tab.passage).processText());
-		} else if (tab && typeof tab.render === "function") {
-			tab.render(els.fwContent);
-		} else {
-			var p = document.createElement("p");
-			var em = document.createElement("em");
-			em.textContent = tab
-				? 'Nothing to show — create a passage called "' + tab.passage + '" or give the tab a render function.'
-				: "No tabs registered.";
-			p.appendChild(em);
-			els.fwContent.appendChild(p);
-		}
-	}
+        function renderActiveTab() {
+                els.fwContent.textContent = "";
+                var tab = findTab(activeTab);
+                if (tab && tab.passage && Story.has(tab.passage)) {
+                        new Wikifier(els.fwContent, Story.get(tab.passage).processText());
+                } else if (tab && typeof tab.render === "function") {
+                        tab.render(els.fwContent);
+                } else {
+                        var p = document.createElement("p");
+                        var em = document.createElement("em");
+                        em.textContent = tab
+                                ? 'Nothing to show — create a passage called "' + tab.passage + '" or give the tab a render function.'
+                                : "No tabs registered.";
+                        p.appendChild(em);
+                        els.fwContent.appendChild(p);
+                }
+        }
 
-	setup.ui.registerTab = function (def) {
-		if (!def || !def.id) throw new Error("setup.ui.registerTab: an id is required");
-		var existing = findTab(def.id);
-		if (existing) {
-			if (def.title   != null) existing.title   = def.title;
-			if (def.passage != null) existing.passage = def.passage;
-			if (def.render  != null) existing.render  = def.render;
-			return existing;
-		}
-		var tab = {
-			id:      def.id,
-			title:   def.title || def.id,
-			passage: def.passage || null,
-			render:  def.render || null
-		};
-		setup.ui.tabs.push(tab);
-		return tab;
-	};
+        setup.ui.registerTab = function (def) {
+                if (!def || !def.id) throw new Error("setup.ui.registerTab: an id is required");
+                var existing = findTab(def.id);
+                if (existing) {
+                        if (def.title   != null) existing.title   = def.title;
+                        if (def.passage != null) existing.passage = def.passage;
+                        if (def.render  != null) existing.render  = def.render;
+                        return existing;
+                }
+                var tab = {
+                        id:      def.id,
+                        title:   def.title || def.id,
+                        passage: def.passage || null,
+                        render:  def.render || null
+                };
+                setup.ui.tabs.push(tab);
+                return tab;
+        };
 
-	setup.ui.openWindow = function (tabId) {
-		if (tabId) activeTab = tabId;
-		else if (!findTab(activeTab) && setup.ui.tabs.length) activeTab = setup.ui.tabs[0].id;
-		isOpen = true;
-		els.fw.classList.add("is-open");
-		els.fw.setAttribute("aria-hidden", "false");
-		renderTabBar();
-		renderActiveTab();
-	};
+        setup.ui.openWindow = function (tabId) {
+                if (tabId) activeTab = tabId;
+                else if (!findTab(activeTab) && setup.ui.tabs.length) activeTab = setup.ui.tabs[0].id;
+                isOpen = true;
+                els.fw.classList.add("is-open");
+                els.fw.setAttribute("aria-hidden", "false");
+                document.body.classList.add("fw-open");
+                renderTabBar();
+                renderActiveTab();
+        };
 
-	setup.ui.closeWindow = function () {
-		isOpen = false;
-		els.fw.classList.remove("is-open");
-		els.fw.setAttribute("aria-hidden", "true");
-	};
+        setup.ui.closeWindow = function () {
+                isOpen = false;
+                els.fw.classList.remove("is-open");
+                els.fw.setAttribute("aria-hidden", "true");
+                document.body.classList.remove("fw-open");
+        };
 
-	setup.ui.switchTab = function (tabId) {
-		activeTab = tabId;
-		if (isOpen) {
-			renderTabBar();
-			renderActiveTab();
-		}
-	};
+        setup.ui.switchTab = function (tabId) {
+                activeTab = tabId;
+                if (isOpen) {
+                        renderTabBar();
+                        renderActiveTab();
+                }
+        };
 
-	jQuery(document).on(":storyready", function () {
-		els.fw        = document.getElementById("floating-window");
-		els.fwTabs    = document.getElementById("fw-tabs");
-		els.fwContent = document.getElementById("fw-content");
+        jQuery(document).on(":storyready", function () {
+                els.fw        = document.getElementById("floating-window");
+                els.fwTabs    = document.getElementById("fw-tabs");
+                els.fwContent = document.getElementById("fw-content");
 
-		document.getElementById("fw-close").addEventListener("click", setup.ui.closeWindow);
-		document.addEventListener("keydown", function (e) {
-			if (e.key === "Escape" && isOpen) setup.ui.closeWindow();
-		});
+                document.getElementById("fw-close").addEventListener("click", setup.ui.closeWindow);
+                document.addEventListener("keydown", function (e) {
+                        if (e.key === "Escape" && isOpen) setup.ui.closeWindow();
+                });
 
-		/* Convention tabs: exist as soon as the matching passage does. */
-		if (Story.has("Inventory")) setup.ui.registerTab({ id: "inventory", title: "Inventory", passage: "Inventory" });
-		if (Story.has("Quests"))    setup.ui.registerTab({ id: "quests",    title: "Quests",    passage: "Quests" });
+                /* Convention tabs: exist as soon as the matching passage does. */
+                if (Story.has("Inventory")) setup.ui.registerTab({ id: "inventory", title: "Inventory", passage: "Inventory" });
+                if (Story.has("Quests"))    setup.ui.registerTab({ id: "quests",    title: "Quests",    passage: "Quests" });
 
-		/* Keep the open tab in sync with panel refreshes. */
-		jQuery(document).on(":uiupdate", function () {
-			if (isOpen) renderActiveTab();
-		});
-	});
+                /* Keep the open tab in sync with panel refreshes. */
+                jQuery(document).on(":uiupdate", function () {
+                        if (isOpen) renderActiveTab();
+                });
+        });
 })();

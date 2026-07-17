@@ -1,0 +1,368 @@
+:: QuestScript [script]
+/* =========================================================================
+ * Module: quests — catalog-driven quest log with state-validated subquests.
+ *
+ * Visual language: quest cards reuse .ui-card; subquest rows reuse the
+ * .ui-check visual pattern (small square that fills with the accent colour
+ * when complete). No new colours are introduced.
+ *
+ * CATALOG:
+ *   setup.quests.register(id, {
+ *     id, title, description,
+ *     subquests: [
+ *       { id, title, status: function () { return "not_started"
+ *                                 | "in_progress" | "completed" | "failed"; } }
+ *     ],
+ *     onStart:    function (state) { ... },
+ *     onComplete: function (state) { ... }
+ *   });
+ *
+ *   Subquest status is *validated*, not stored: status() reads
+ *   State.variables and returns the appropriate label. Subquests
+ *   auto-advance as the player satisfies their conditions.
+ *
+ * STATE:
+ *   $quests = { active: [ids…], completed: [ids…] }
+ *
+ * API:
+ *   setup.quests.start(id) / .complete(id) / .status(id) / .substatus(q, s)
+ *
+ * MACROS:
+ *   <<questStart "id">>      start a quest (story-flow macro)
+ *   <<questComplete "id">>   complete a quest
+ *   <<questLog>>             render the full quest log panel
+ *
+ * Quest overall status derivation:
+ *   - "completed"   if in $quests.completed
+ *   - "not_started" if not in active nor completed
+ *   - "failed"      if any subquest.status() returns "failed"
+ *   - "active"      otherwise
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[quests] setup.ui not ready — deferring macro registration");
+                return;
+        }
+
+        var h = setup.ui.h;
+        function V() { return State.variables; }
+
+        function ensureState() {
+                var v = V();
+                if (typeof v.quests !== "object" || v.quests == null) v.quests = { active: [], completed: [] };
+                if (!Array.isArray(v.quests.active))    v.quests.active = [];
+                if (!Array.isArray(v.quests.completed)) v.quests.completed = [];
+                return v;
+        }
+
+        var pending = false;
+        function refresh() {
+                if (pending) return;
+                pending = true;
+                setTimeout(function () { pending = false; setup.ui.refresh(); }, 0);
+        }
+
+        function safeStatus(fn, fallback) {
+                if (typeof fn !== "function") return fallback || "not_started";
+                try { var s = fn(); return s || fallback || "not_started"; }
+                catch (e) { console.error("[quests] status() threw:", e); return fallback || "not_started"; }
+        }
+
+        setup.quests = {
+                catalog: Object.create(null),
+
+                register: function (id, def) {
+                        if (!id) throw new Error("setup.quests.register: id required");
+                        var base = { id: id, title: id, description: "", subquests: [] };
+                        this.catalog[id] = Object.assign(base, def || {});
+                },
+                get: function (id) { return this.catalog[id] || null; },
+                all: function ()   { return Object.keys(this.catalog); },
+
+                start: function (id) {
+                        var def = this.get(id);
+                        if (!def) { console.warn("[quests] unknown quest:", id); return this; }
+                        ensureState();
+                        var v = V();
+                        if (v.quests.active.indexOf(id) >= 0) return this;
+                        if (v.quests.completed.indexOf(id) >= 0) return this;
+                        v.quests.active.push(id);
+                        if (typeof def.onStart === "function") {
+                                try { def.onStart(v); } catch (e) { console.error(e); }
+                        }
+                        refresh();
+                        return this;
+                },
+                complete: function (id) {
+                        var def = this.get(id);
+                        if (!def) { console.warn("[quests] unknown quest:", id); return this; }
+                        ensureState();
+                        var v = V();
+                        var idx = v.quests.active.indexOf(id);
+                        if (idx < 0) return this;
+                        v.quests.active.splice(idx, 1);
+                        if (v.quests.completed.indexOf(id) < 0) v.quests.completed.push(id);
+                        if (typeof def.onComplete === "function") {
+                                try { def.onComplete(v); } catch (e) { console.error(e); }
+                        }
+                        refresh();
+                        return this;
+                },
+                status: function (id) {
+                        ensureState();
+                        var v = V();
+                        if (v.quests.completed.indexOf(id) >= 0) return "completed";
+                        if (v.quests.active.indexOf(id) < 0) return "not_started";
+                        var def = this.get(id);
+                        if (def && def.subquests) {
+                                for (var i = 0; i < def.subquests.length; i++) {
+                                        var s = safeStatus(def.subquests[i].status, "not_started");
+                                        if (s === "failed") return "failed";
+                                }
+                        }
+                        return "active";
+                },
+                substatus: function (questId, subId) {
+                        var def = this.get(questId);
+                        if (!def || !def.subquests) return "not_started";
+                        for (var i = 0; i < def.subquests.length; i++) {
+                                if (def.subquests[i].id === subId) {
+                                        return safeStatus(def.subquests[i].status, "not_started");
+                                }
+                        }
+                        return "not_started";
+                }
+        };
+
+        Macro.add("questStart", {
+                handler: function () {
+                        if (!this.args.length) return this.error("usage: <<questStart id>>");
+                        setup.quests.start(String(this.args[0]));
+                }
+        });
+        Macro.add("questComplete", {
+                handler: function () {
+                        if (!this.args.length) return this.error("usage: <<questComplete id>>");
+                        setup.quests.complete(String(this.args[0]));
+                }
+        });
+
+        /* =====================================================================
+         *  <<questLog>> — full panel render
+         *
+         *  Filter tabs reuse .fw-tab styling so they harmonise with the
+         *  window's own tab bar. Quest cards reuse .ui-card. Subquest rows
+         *  reuse the .ui-check visual pattern (small square that fills with
+         *  the accent colour when complete, red when failed).
+         * ===================================================================== */
+        var activeFilter = "active";
+
+        Macro.add("questLog", {
+                handler: function () {
+                        var v = ensureState();
+                        var root = h("div", { "class": "ql" });
+
+                        /* --- Filter tabs: same visual as .fw-tab --- */
+                        var tabs = h("div", { "class": "ql__tabs" });
+                        var filters = [
+                                { id: "active",    label: "Active ("    + v.quests.active.length    + ")" },
+                                { id: "completed", label: "Completed (" + v.quests.completed.length + ")" },
+                                { id: "all",       label: "All ("       + setup.quests.all().length  + ")" }
+                        ];
+                        filters.forEach(function (f) {
+                                var isActive = activeFilter === f.id;
+                                var tab = h("button", {
+                                        type: "button",
+                                        "class": "fw-tab" + (isActive ? " is-active" : "")
+                                }, f.label);
+                                tab.addEventListener("click", function () { activeFilter = f.id; refresh(); });
+                                tabs.appendChild(tab);
+                        });
+                        root.appendChild(tabs);
+
+                        /* --- Resolve quest ids to show --- */
+                        var ids;
+                        if (activeFilter === "active")         ids = v.quests.active.slice();
+                        else if (activeFilter === "completed") ids = v.quests.completed.slice();
+                        else                                    ids = setup.quests.all();
+
+                        /* --- Quest list --- */
+                        var list = h("div", { "class": "ql__list" });
+                        if (ids.length === 0) {
+                                list.appendChild(h("div", { "class": "inv-empty", text: "No quests here." }));
+                        } else {
+                                ids.forEach(function (id) {
+                                        var def = setup.quests.get(id);
+                                        if (!def) return;
+                                        var status = setup.quests.status(id);
+                                        var card = h("section", { "class": "ui-card ql-quest is-" + status });
+                                        var title = def.title;
+                                        if (status === "completed") title += " ✓";
+                                        card.appendChild(h("header", { "class": "ui-card__title" }, title));
+                                        var body = h("div", { "class": "ui-card__body" });
+                                        card.appendChild(body);
+
+                                        if (def.description) {
+                                                body.appendChild(h("div", { "class": "ql-quest__desc", text: def.description }));
+                                        }
+                                        body.appendChild(h("div", {
+                                                "class": "ql-quest__status ql-status--" + status,
+                                                text: status.replace(/_/g, " ")
+                                        }));
+
+                                        if (def.subquests && def.subquests.length) {
+                                                var sqList = h("ul", { "class": "ql-subquests" });
+                                                def.subquests.forEach(function (sq) {
+                                                        var sStatus = setup.quests.substatus(id, sq.id);
+                                                        var li = h("li", { "class": "ql-subquest is-" + sStatus });
+                                                        /* Square indicator — same visual idea as .ui-check__box */
+                                                        li.appendChild(h("span", { "class": "ql-subquest__box", "aria-hidden": "true" }));
+                                                        li.appendChild(h("span", { "class": "ql-subquest__title", text: sq.title }));
+                                                        li.appendChild(h("span", {
+                                                                "class": "ql-subquest__status",
+                                                                text: sStatus.replace(/_/g, " ")
+                                                        }));
+                                                        sqList.appendChild(li);
+                                                });
+                                                body.appendChild(sqList);
+                                        }
+                                        list.appendChild(card);
+                                });
+                        }
+                        root.appendChild(list);
+                        this.output.appendChild(root);
+                }
+        });
+})();
+
+:: QuestStyle [stylesheet]
+/* =========================================================================
+ * Quest log — reuses ui-card for quest cards and the ui-check visual pattern
+ * for subquest status squares. No new colours beyond the six CSS variables.
+ * ========================================================================= */
+.ql {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        /* Fill the floating-window content area. */
+        height: 100%;
+        min-height: 0;
+}
+
+.ql__tabs {
+        display: flex;
+        gap: 4px;
+        flex: 0 0 auto;
+}
+
+.ql__list {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+}
+
+.ql-quest {
+        /* ui-card already provides bg, border, radius. We add a coloured
+         * left edge to communicate status at a glance. */
+        border-left: 3px solid var(--ui-border);
+}
+.ql-quest.is-active       { border-left-color: var(--ui-accent); }
+.ql-quest.is-completed    { border-left-color: #2ecc71; opacity: 0.9; }
+.ql-quest.is-failed       { border-left-color: #e74c3c; }
+.ql-quest.is-not_started  { border-left-color: var(--ui-border); opacity: 0.85; }
+
+.ql-quest__desc {
+        font-size: 85%;
+        color: var(--ui-text-dim);
+        line-height: 1.4;
+        margin-bottom: 6px;
+}
+
+.ql-quest__status {
+        display: inline-block;
+        font-size: 70%;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ui-text-dim);
+        margin-bottom: 6px;
+}
+.ql-status--active       { color: var(--ui-accent); }
+.ql-status--completed    { color: #2ecc71; }
+.ql-status--failed       { color: #e74c3c; }
+.ql-status--not_started  { color: var(--ui-text-dim); }
+
+.ql-subquests {
+        list-style: none;
+        padding: 0;
+        margin: 4px 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+}
+.ql-subquest {
+        display: grid;
+        grid-template-columns: 13px 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 85%;
+        line-height: 1.4;
+}
+/* The square indicator reuses the .ui-check__box visual: a 13px box with
+ * 1px border, 2px radius, #111 background. When complete it fills with the
+ * accent colour; when failed, red; in-progress, accent outline only. */
+.ql-subquest__box {
+        width: 13px;
+        height: 13px;
+        border: 1px solid var(--ui-border);
+        border-radius: 2px;
+        background: #111;
+        position: relative;
+}
+.ql-subquest.is-in_progress .ql-subquest__box {
+        border-color: var(--ui-accent);
+        background: var(--ui-accent);
+        opacity: 0.4;
+}
+.ql-subquest.is-completed .ql-subquest__box {
+        background: var(--ui-accent);
+        border-color: var(--ui-accent);
+}
+.ql-subquest.is-completed .ql-subquest__box::after {
+        content: "\2713";
+        position: absolute;
+        inset: 0;
+        color: #fff;
+        font-size: 11px;
+        line-height: 13px;
+        text-align: center;
+}
+.ql-subquest.is-failed .ql-subquest__box {
+        background: #e74c3c;
+        border-color: #e74c3c;
+}
+.ql-subquest.is-failed .ql-subquest__box::after {
+        content: "\00d7";
+        position: absolute;
+        inset: 0;
+        color: #fff;
+        font-size: 12px;
+        line-height: 13px;
+        text-align: center;
+}
+.ql-subquest.is-completed .ql-subquest__title {
+        color: var(--ui-text-dim);
+        text-decoration: line-through;
+}
+.ql-subquest__status {
+        font-size: 70%;
+        color: var(--ui-text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+}
+.ql-subquest.is-completed .ql-subquest__status   { color: var(--ui-accent); }
+.ql-subquest.is-in_progress .ql-subquest__status { color: var(--ui-accent); }
+.ql-subquest.is-failed .ql-subquest__status      { color: #e74c3c; }

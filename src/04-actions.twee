@@ -19,147 +19,148 @@
  * Re-register any id to override it; register new ids for your own windows.
  * ========================================================================= */
 (function () {
-	"use strict";
+        "use strict";
 
-	var h = setup.ui.h;
-	var registry = Object.create(null);
-	var styleEl = null;
+        var h = setup.ui.h;
+        var registry = Object.create(null);
+        var styleEl = null;
 
-	function ensureStyle() {
-		if (!styleEl) {
-			styleEl = document.createElement("style");
-			styleEl.id = "style-ui-actions-dynamic";
-			document.head.appendChild(styleEl);
-		}
-		return styleEl;
-	}
+        function ensureStyle() {
+                if (!styleEl) {
+                        styleEl = document.createElement("style");
+                        styleEl.id = "style-ui-actions-dynamic";
+                        document.head.appendChild(styleEl);
+                }
+                return styleEl;
+        }
 
-	function isPUA(cp) {
-		return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD);
-	}
+        function isPUA(cp) {
+                return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD);
+        }
 
-	setup.actions = {
-		register: function (id, def) {
-			if (!id || !def || typeof def.handler !== "function") {
-				throw new Error('setup.actions.register("' + id + '"): a handler function is required');
-			}
-			registry[id] = {
-				label:    def.label || id,
-				title:    def.title || def.label || id,
-				icon:     def.icon || "",
-				handler:  def.handler,
-				disabled: def.disabled || false
-			};
-			if (def.icon) {
-				var cp = def.icon.codePointAt(0);
-				var sel = ".ui-action--" + id + " .ui-action__icon::before";
-				ensureStyle().textContent += isPUA(cp)
-					? sel + '{font-family:sc-icons;content:"\\' + cp.toString(16) + ' ";}'
-					: sel + '{content:"' + def.icon.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '";}';
-			}
-		},
-		get: function (id) { return registry[id] || null; },
-		run: function (id) { var d = registry[id]; if (d) d.handler(); }
-	};
+        setup.actions = {
+                register: function (id, def) {
+                        if (!id || !def || typeof def.handler !== "function") {
+                                throw new Error('setup.actions.register("' + id + '"): a handler function is required');
+                        }
+                        registry[id] = {
+                                label:    def.label || id,
+                                title:    def.title || def.label || id,
+                                icon:     def.icon || "",
+                                handler:  def.handler,
+                                disabled: def.disabled || false
+                        };
+                        if (def.icon) {
+                                var cp = def.icon.codePointAt(0);
+                                var sel = ".ui-action--" + id + " .ui-action__icon::before";
+                                ensureStyle().textContent += isPUA(cp)
+                                        ? sel + '{font-family:sc-icons;content:"\\' + cp.toString(16) + ' ";}'
+                                        : sel + '{content:"' + def.icon.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '";}';
+                        }
+                },
+                get: function (id) { return registry[id] || null; },
+                run: function (id) { var d = registry[id]; if (d) d.handler(); }
+        };
 
-	Macro.add("uiAction", {
-		handler: function () {
-			if (!this.args.length) return this.error("usage: <<uiAction id>>");
-			var id  = String(this.args[0]);
-			var def = setup.actions.get(id);
-			if (!def) return this.error('unknown action "' + id + '" — register it via setup.actions.register()');
+        Macro.add("uiAction", {
+                handler: function () {
+                        if (!this.args.length) return this.error("usage: <<uiAction id>>");
+                        var id  = String(this.args[0]);
+                        var def = setup.actions.get(id);
+                        if (!def) return this.error('unknown action "' + id + '" — register it via setup.actions.register()');
 
-			var btn = h("button", {
-				"class": "ui-action ui-action--" + id,
-				type: "button",
-				title: def.title
-			});
-			if (def.icon) btn.appendChild(h("span", { "class": "ui-action__icon", "aria-hidden": "true" }));
-			btn.appendChild(h("span", { "class": "ui-action__label" }, def.label));
+                        var btn = h("button", {
+                                "class": "ui-action ui-action--" + id,
+                                type: "button",
+                                title: def.title
+                        });
+                        if (def.icon) btn.appendChild(h("span", { "class": "ui-action__icon", "aria-hidden": "true" }));
+                        btn.appendChild(h("span", { "class": "ui-action__label" }, def.label));
 
-			var off = typeof def.disabled === "function" ? !!def.disabled() : !!def.disabled;
-			if (off) {
-				btn.disabled = true;
-				btn.setAttribute("aria-disabled", "true");
-			}
-			btn.addEventListener("click", function (ev) {
-				ev.preventDefault();
-				def.handler();
-			});
-			this.output.appendChild(btn);
-		}
-	});
+                        var off = typeof def.disabled === "function" ? !!def.disabled() : !!def.disabled;
+                        if (off) {
+                                btn.disabled = true;
+                                btn.setAttribute("aria-disabled", "true");
+                        }
+                        btn.addEventListener("click", function (ev) {
+                                ev.preventDefault();
+                                def.handler();
+                        });
+                        this.output.appendChild(btn);
+                }
+        });
 
-	/* --- Built-in actions -------------------------------------------------
-	 * Icons reference SugarCube's bundled sc-icons font (PUA codepoints). */
-	setup.actions.register("back", {
-		label: "Back", icon: "\uF060",
-		handler: function () { Engine.backward(); },
-		disabled: function () { return State.length < 2; }
-	});
-	setup.actions.register("forward", {
-		label: "Forward", icon: "\uF061",
-		handler: function () { Engine.forward(); },
-		disabled: function () { return State.length === State.size; }
-	});
-	setup.actions.register("saves", {
-		label: "Saves", icon: "\uF0C7",
-		handler: function () { UI.saves(); }
-	});
-	setup.actions.register("settings", {
-		label: "Settings", icon: "\uF013",
-		handler: function () { UI.settings(); }
-	});
-	setup.actions.register("restart", {
-		label: "Restart", icon: "\uF011",
-		handler: function () { UI.restart(); }
-	});
-	setup.actions.register("inventory", {
-		label: "Inventory", icon: "\uF0C9",
-		handler: function () { setup.ui.openWindow("inventory"); }
-	});
-	setup.actions.register("quests", {
-		label: "Quests", icon: "\uF14A",
-		handler: function () { setup.ui.openWindow("quests"); }
-	});
+        /* --- Built-in actions -------------------------------------------------
+         * Icons reference SugarCube's bundled sc-icons font (PUA codepoints). */
+        setup.actions.register("back", {
+                label: "Back", icon: "\uF060",
+                handler: function () { Engine.backward(); },
+                disabled: function () { return State.length < 2; }
+        });
+        setup.actions.register("forward", {
+                label: "Forward", icon: "\uF061",
+                handler: function () { Engine.forward(); },
+                disabled: function () { return State.length === State.size; }
+        });
+        setup.actions.register("saves", {
+                label: "Saves", icon: "\uF0C7",
+                handler: function () { UI.saves(); }
+        });
+        setup.actions.register("settings", {
+                label: "Settings", icon: "\uF013",
+                handler: function () { UI.settings(); }
+        });
+        setup.actions.register("restart", {
+                label: "Restart", icon: "\uF011",
+                handler: function () { UI.restart(); }
+        });
+        setup.actions.register("inventory", {
+                label: "Inventory", icon: "\uF0C9",
+                handler: function () { setup.ui.openWindow("inventory"); }
+        });
+        setup.actions.register("quests", {
+                label: "Quests", icon: "\uF14A",
+                handler: function () { setup.ui.openWindow("quests"); }
+        });
 })();
 
 :: ActionStyle [stylesheet]
 /* =========================================================================
  * Action buttons (left sidebar). Icons use SugarCube's sc-icons font.
+ * Dimensions are multiples of --ui-unit so they scale with the viewport.
  * ========================================================================= */
 .ui-action {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 7px;
-	width: 100%;
-	padding: 5px 10px;
-	box-sizing: border-box;
-	color: var(--ui-text);
-	background: transparent;
-	border: 1px solid var(--ui-border);
-	border-radius: 3px;
-	font: inherit;
-	text-transform: uppercase;
-	cursor: pointer;
-	user-select: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: calc(var(--ui-unit) * 0.875);
+        width: 100%;
+        padding: calc(var(--ui-unit) * 0.625) calc(var(--ui-unit) * 1.25);
+        box-sizing: border-box;
+        color: var(--ui-text);
+        background: transparent;
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        font: inherit;
+        text-transform: uppercase;
+        cursor: pointer;
+        user-select: none;
 }
 .ui-action:hover:not(:disabled) {
-	background: var(--ui-hover);
-	border-color: var(--ui-text);
+        background: var(--ui-hover);
+        border-color: var(--ui-text);
 }
 .ui-action:disabled {
-	color: #555;
-	border-color: #333;
-	cursor: default;
+        color: #555;
+        border-color: #333;
+        cursor: default;
 }
 .ui-action:focus-visible {
-	outline: 2px solid var(--ui-accent);
-	outline-offset: 1px;
+        outline: 2px solid var(--ui-accent);
+        outline-offset: 1px;
 }
 .ui-action__icon {
-	width: 1em;
-	line-height: 1;
-	font-style: normal;
+        width: 1em;
+        line-height: 1;
+        font-style: normal;
 }
