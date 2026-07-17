@@ -1,0 +1,257 @@
+:: AvatarScript [script]
+/* =========================================================================
+ * Module: avatar — layered character portrait compositor.
+ *
+ * The portrait is built from transparent PNGs stacked on a single 2D
+ * <canvas> in configured layer order (bottom → top). Every layer holds
+ * one image id or nothing ("none" state).
+ *
+ * Passage API:
+ *   <<avatarview>>                      mounts the portrait canvas here
+ *                                       (place it once in PanelRight)
+ *   <<avatarset "body_hair" "hair_red">>  set a layer's image
+ *   <<avatarset "body_hair">>           clear a layer (none state)
+ *   <<avatarclear>>                     clear every layer
+ *
+ * JS API (inventory systems, character creation, etc.):
+ *   setup.avatar.configure({ width, height, layers: [{id, label?}, …] })
+ *       Define the design resolution and the layer stack. The shipped
+ *       list below is a placeholder — replace it with your own layers
+ *       (body ×3+, apparel, makeup, …), in bottom→top draw order.
+ *   setup.avatar.setLayer(id, imageId | null, opts?)
+ *       opts may crop/place the source image:
+ *       { sx, sy, sw, sh }  source rect  (default: whole image)
+ *       { dx, dy, dw, dh }  dest rect    (default: whole design space)
+ *       { alpha }           0..1         (default: 1)
+ *   setup.avatar.getLayer(id) / .clearLayer(id)?  — see below
+ *   setup.avatar.clearAll()
+ *   setup.avatar.preload([ids…])
+ *   setup.avatar.render()        force a redraw
+ *   setup.avatar.layers()        configured layer ids, bottom → top
+ *
+ * State lives in the $avatar story variable → saves/rewind-safe.
+ * Rendering is rAF-coalesced (many setLayer calls in one tick = one draw),
+ * devicePixelRatio-aware, and images are cached + drawn when loaded.
+ * A ":avatarrender" jQuery event fires on document after every draw.
+ * ========================================================================= */
+(function () {
+	"use strict";
+
+	/* --- Configuration — EDIT THIS ---------------------------------------
+	 * Design space is the internal coordinate system of the canvas; the
+	 * element itself scales responsively to its container's width.       */
+	var cfg = {
+		width: 600,
+		height: 900,
+		layers: [
+			{ id: "body_base" },
+			{ id: "body_face" },
+			{ id: "body_hair" },
+			{ id: "apparel_bottom" },
+			{ id: "apparel_top" },
+			{ id: "makeup" },
+			{ id: "accessory" }
+		]
+	};
+	/* --------------------------------------------------------------------- */
+
+	var canvas = null, ctx = null;
+	var rafId = 0, dirty = false;
+	var cache = new Map();   // url → { img, loaded, failed }
+
+	function state() {
+		var V = State.variables;
+		if (!V.avatar || typeof V.avatar !== "object") V.avatar = { layers: {} };
+		if (!V.avatar.layers || typeof V.avatar.layers !== "object") V.avatar.layers = {};
+		return V.avatar;
+	}
+
+	function hasLayer(id) {
+		return cfg.layers.some(function (l) { return l.id === id; });
+	}
+
+	function loadImage(url) {
+		var e = cache.get(url);
+		if (!e) {
+			var img = new Image();
+			img.decoding = "async";
+			e = { img: img, loaded: false, failed: false };
+			img.onload  = function () { e.loaded = true; requestRender(); };
+			img.onerror = function () { e.failed = true; console.warn("[avatar] image failed to load:", url); };
+			img.src = url;
+			cache.set(url, e);
+		}
+		return e;
+	}
+
+	function ensureCanvas() {
+		if (!canvas) {
+			canvas = document.createElement("canvas");
+			canvas.className = "avatar-canvas";
+			canvas.setAttribute("role", "img");
+			canvas.setAttribute("aria-label", "Character portrait");
+			canvas.style.aspectRatio = cfg.width + " / " + cfg.height;
+			ctx = canvas.getContext("2d");
+			if (typeof ResizeObserver !== "undefined") {
+				new ResizeObserver(function () { requestRender(); }).observe(canvas);
+			}
+		}
+		return canvas;
+	}
+
+	function requestRender() {
+		dirty = true;
+		if (!rafId) {
+			rafId = requestAnimationFrame(function () {
+				rafId = 0;
+				if (dirty) { dirty = false; render(); }
+			});
+		}
+	}
+
+	function render() {
+		if (!canvas || !ctx) return;
+		var cssW = canvas.clientWidth;
+		if (cssW <= 0) return;   // detached/hidden — ResizeObserver will retrigger
+
+		var dpr = window.devicePixelRatio || 1;
+		var bw  = Math.max(1, Math.round(cssW * dpr));
+		var bh  = Math.max(1, Math.round(bw * cfg.height / cfg.width));
+		if (canvas.width !== bw || canvas.height !== bh) {
+			canvas.width  = bw;
+			canvas.height = bh;
+		}
+
+		ctx.setTransform(bw / cfg.width, 0, 0, bw / cfg.width, 0, 0);
+		ctx.clearRect(0, 0, cfg.width, cfg.height);
+
+		var layers = state().layers;
+		cfg.layers.forEach(function (def) {
+			var l = layers[def.id];
+			if (!l || !l.img) return;
+			var entry = loadImage(setup.media.resolve(l.img));
+			if (!entry.loaded || entry.failed) return;  // draws once loaded
+
+			var img = entry.img;
+			var sx = l.sx != null ? l.sx : 0;
+			var sy = l.sy != null ? l.sy : 0;
+			var sw = l.sw != null ? l.sw : img.naturalWidth;
+			var sh = l.sh != null ? l.sh : img.naturalHeight;
+			var dx = l.dx != null ? l.dx : 0;
+			var dy = l.dy != null ? l.dy : 0;
+			var dw = l.dw != null ? l.dw : cfg.width;
+			var dh = l.dh != null ? l.dh : cfg.height;
+
+			ctx.globalAlpha = l.alpha != null ? l.alpha : 1;
+			try { ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh); }
+			catch (ex) { console.warn("[avatar] draw failed for layer", def.id, ex); }
+		});
+		ctx.globalAlpha = 1;
+
+		jQuery(document).triggerHandler(":avatarrender");
+	}
+
+	setup.avatar = {
+		configure: function (opts) {
+			if (!opts) return;
+			if (opts.width)  cfg.width  = Number(opts.width)  || cfg.width;
+			if (opts.height) cfg.height = Number(opts.height) || cfg.height;
+			if (Array.isArray(opts.layers) && opts.layers.length) {
+				cfg.layers = opts.layers.map(function (l) {
+					return { id: String(l.id), label: l.label || String(l.id) };
+				});
+			}
+			if (canvas) {
+				canvas.style.aspectRatio = cfg.width + " / " + cfg.height;
+				requestRender();
+			}
+			return this;
+		},
+		layers: function () {
+			return cfg.layers.map(function (l) { return l.id; });
+		},
+		setLayer: function (id, image, opts) {
+			if (!hasLayer(id)) {
+				throw new Error('unknown avatar layer "' + id + '" — configure layers via setup.avatar.configure()');
+			}
+			var layers = state().layers;
+			if (image == null || image === "") {
+				delete layers[id];
+			} else {
+				var rec = { img: String(image) };
+				if (opts) {
+					["sx", "sy", "sw", "sh", "dx", "dy", "dw", "dh", "alpha"].forEach(function (k) {
+						if (opts[k] != null) rec[k] = opts[k];
+					});
+				}
+				layers[id] = rec;
+			}
+			requestRender();
+			return this;
+		},
+		getLayer: function (id) {
+			return state().layers[id] || null;
+		},
+		clearLayer: function (id) {
+			delete state().layers[id];
+			requestRender();
+			return this;
+		},
+		clearAll: function () {
+			state().layers = {};
+			requestRender();
+			return this;
+		},
+		preload: function (ids) {
+			(ids || []).forEach(function (id) { loadImage(setup.media.resolve(id)); });
+			return this;
+		},
+		mount: function (parent) {
+			var c = ensureCanvas();
+			if (c.parentNode !== parent) parent.appendChild(c);
+			requestRender();
+		},
+		render: requestRender
+	};
+
+	/* --- Macros ---------------------------------------------------------- */
+
+	Macro.add("avatarview", {
+		handler: function () {
+			var mount = setup.ui.h("div", { "class": "avatar-mount" });
+			this.output.appendChild(mount);
+			setup.avatar.mount(mount);
+		}
+	});
+
+	Macro.add("avatarset", {
+		handler: function () {
+			if (!this.args.length) return this.error("usage: <<avatarset layer [image]>>");
+			try { setup.avatar.setLayer(String(this.args[0]), this.args.length > 1 ? this.args[1] : null); }
+			catch (ex) { return this.error(ex.message); }
+		}
+	});
+
+	Macro.add("avatarclear", {
+		handler: function () { setup.avatar.clearAll(); }
+	});
+})();
+
+:: AvatarStyle [stylesheet]
+/* =========================================================================
+ * Avatar portrait canvas. The mount is regenerated whenever the panel
+ * re-renders; the canvas itself is a persistent singleton that is simply
+ * re-attached, so its bitmap and the image cache survive.
+ * ========================================================================= */
+.avatar-mount {
+	display: block;
+	background: #111;
+	border: 1px solid var(--ui-border);
+	border-radius: 4px;
+	overflow: hidden;
+}
+.avatar-canvas {
+	display: block;
+	width: 100%;
+	height: auto;
+}

@@ -1,0 +1,205 @@
+:: SceneScript [script]
+/* =========================================================================
+ * Module: scene — layered scene canvas (region 2).
+ *
+ * Story API (called from any story passage; applied on passage display):
+ *   <<scene "sprites" "alice" "merchant">>
+ *       Sets the images of one layer. First argument is the layer —
+ *       either its configured name (string) or its index (number).
+ *       Remaining arguments are image ids resolved via setup.media.
+ *       Multiple images on one layer are laid out with even spacing.
+ *       With no image arguments the layer is cleared.
+ *   <<sceneClear>> / <<sceneClear "sprites">>
+ *       Clears all layers / one layer.
+ *
+ * JS API:
+ *   setup.scene.configure({ layers: [{ name, fit, align? }, ...] })
+ *       fit: "even"    → images side-by-side, evenly spaced, bottom-aligned
+ *            "cover"   → images stacked full-bleed (object-fit: cover)
+ *            "contain" → images stacked, centered (object-fit: contain)
+ *       align: flex alignment for "even" layers (default "flex-end")
+ *   setup.scene.set(layer, [ids…]) / .clear(layer?) / .apply()
+ *   setup.scene.layers() → configured layer names in z order
+ *
+ * State lives in the $scene story variable, so saves, rewind and the
+ * back/forward buttons automatically restore the correct scene.
+ * Re-rendering diffs per layer — unchanged layers never touch the DOM.
+ * ========================================================================= */
+(function () {
+	"use strict";
+
+	var h = setup.ui.h;
+
+	var config = {
+		layers: [
+			{ name: "bg",      fit: "cover"   },
+			{ name: "scene",   fit: "contain" },
+			{ name: "sprites", fit: "even"    },
+			{ name: "effects", fit: "contain" }
+		]
+	};
+
+	var applied = Object.create(null);  // layer name → JSON of last rendered urls
+
+	function state() {
+		var V = State.variables;
+		if (!V.scene || typeof V.scene !== "object") V.scene = {};
+		return V.scene;
+	}
+
+	function layerName(layer) {
+		if (typeof layer === "number") {
+			var def = config.layers[layer];
+			if (!def) throw new Error("scene layer index out of range: " + layer);
+			return def.name;
+		}
+		var name = String(layer);
+		for (var i = 0; i < config.layers.length; i++) {
+			if (config.layers[i].name === name) return name;
+		}
+		throw new Error('unknown scene layer "' + name + '" — configure layers via setup.scene.configure()');
+	}
+
+	function root() {
+		return document.getElementById("scene-canvas");
+	}
+
+	function renderLayer(index, def, ids) {
+		var urls = [];
+		ids.forEach(function (id) {
+			var url = setup.media.resolve(id);
+			if (url) urls.push(url);
+		});
+		var key = JSON.stringify(urls);
+		if (applied[def.name] === key) return;      // unchanged — skip DOM work
+		applied[def.name] = key;
+
+		var host = root();
+		if (!host) return;
+		var div = host.querySelector('[data-scene-layer="' + def.name + '"]');
+		if (!div) {
+			div = h("div", { "class": "scene-layer" });
+			div.setAttribute("data-scene-layer", def.name);
+			host.appendChild(div);
+		}
+		div.className = "scene-layer scene-layer--fit-" + def.fit +
+			(def.align ? " scene-layer--align-" + def.align : "");
+		div.style.zIndex = String(index + 1);
+		div.textContent = "";
+
+		var n = urls.length;
+		urls.forEach(function (url) {
+			var img = h("img", {
+				"class": "scene-img", src: url, alt: "",
+				draggable: "false", decoding: "async"
+			});
+			if (def.fit === "even") img.style.maxWidth = (Math.floor(10000 / n) / 100) + "%";
+			img.addEventListener("error", function () {
+				img.classList.add("is-missing");
+				console.warn("[scene] image failed to load:", url);
+			}, { once: true });
+			div.appendChild(img);
+		});
+	}
+
+	setup.scene = {
+		configure: function (opts) {
+			if (!opts || !Array.isArray(opts.layers) || !opts.layers.length) return;
+			config.layers = opts.layers.map(function (l, i) {
+				return {
+					name:  String(l.name != null ? l.name : "layer" + i),
+					fit:   l.fit || "even",
+					align: l.align || (l.fit === "even" ? "flex-end" : "center")
+				};
+			});
+			applied = Object.create(null);            // force full re-render
+			this.apply();
+		},
+		layers: function () {
+			return config.layers.map(function (l) { return l.name; });
+		},
+		set: function (layer, images) {
+			var name = layerName(layer);
+			var list = [];
+			(images || []).forEach(function (id) {
+				if (id != null && String(id) !== "") list.push(String(id));
+			});
+			state()[name] = list;
+			return this;
+		},
+		clear: function (layer) {
+			if (layer == null) {
+				var s = state();
+				Object.keys(s).forEach(function (k) { s[k] = []; });
+			} else {
+				state()[layerName(layer)] = [];
+			}
+			return this;
+		},
+		apply: function () {
+			var s = state();
+			config.layers.forEach(function (def, i) {
+				renderLayer(i, def, Array.isArray(s[def.name]) ? s[def.name] : []);
+			});
+		}
+	};
+
+	Macro.add("scene", {
+		handler: function () {
+			if (!this.args.length) return this.error("usage: <<scene layer [image …]>>");
+			try { setup.scene.set(this.args[0], this.args.slice(1)); }
+			catch (ex) { return this.error(ex.message); }
+		}
+	});
+
+	Macro.add("sceneClear", {
+		handler: function () {
+			try { setup.scene.clear(this.args.length ? this.args[0] : null); }
+			catch (ex) { return this.error(ex.message); }
+		}
+	});
+
+	/* Apply the $scene state whenever a passage displays (also covers the
+	   initial start passage and save loads, both of which go through
+	   Engine.play → :passagedisplay). */
+	jQuery(document).on(":passagedisplay", function () {
+		setup.scene.apply();
+	});
+})();
+
+:: SceneStyle [stylesheet]
+/* =========================================================================
+ * Scene canvas layers. Pointer-events are off so the scene never blocks
+ * scrolling or clicking the story text.
+ * ========================================================================= */
+.scene-layer {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+/* even: side-by-side, evenly spaced, bottom-aligned by default */
+.scene-layer--fit-even {
+	display: flex;
+	justify-content: space-evenly;
+	align-items: flex-end;
+}
+.scene-layer--fit-even .scene-img {
+	flex: 0 1 auto;
+	max-height: 100%;
+	object-fit: contain;
+}
+.scene-layer--align-center { align-items: center; }
+
+/* cover / contain: full-layer stacked images */
+.scene-layer--fit-cover .scene-img,
+.scene-layer--fit-contain .scene-img {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+.scene-layer--fit-cover   .scene-img { object-fit: cover; }
+.scene-layer--fit-contain .scene-img { object-fit: contain; }
+
+.scene-img.is-missing { display: none; }

@@ -1,0 +1,86 @@
+:: CoreScript [script]
+/* =========================================================================
+ * Module: core
+ *
+ * Foundation every other module builds on:
+ *
+ *   setup.ui.h(tag, attrs, ...children)
+ *       Tiny hyperscript helper used by all macro modules.
+ *
+ *   setup.ui.refresh()
+ *       Re-renders every panel (all data-passage regions) by calling
+ *       SugarCube's UI.update(). Widgets inside PanelLeft / PanelRight
+ *       re-evaluate their arguments against current game state.
+ *       Call this after changing $vars outside of a passage transition.
+ *
+ *   setup.media.resolve(id)
+ *       Turns a logical image id into a URL. Default convention:
+ *       "media/<id>.png" relative to the story html file.
+ *       Override per-id via setup.media.map, or globally by
+ *       reassigning setup.media.base / setup.media.ext, or by passing
+ *       a path/URL as the id directly.
+ * ========================================================================= */
+(function () {
+	"use strict";
+
+	/* SugarCube evaluates story scripts inside its own closure, where the
+	   bare `setup` identifier IS the canonical setup object (the same one
+	   exposed as SugarCube.setup and used by TwineScript). Mirror it onto
+	   window so devtools/poke scripts see the real thing too. */
+	if (typeof setup === "undefined") {
+		throw new Error("[core] SugarCube's setup object is not available");
+	}
+	window.setup = setup;
+
+	/* --- h(): minimal element builder ------------------------------------
+	 * h("div", {class:"x", id:"y", text:"hi", title:"t"}, child1, child2)
+	 * attr keys: class, id, text, type, src, alt, title, role, tabindex,
+	 *            draggable, decoding, width, height — anything else is set
+	 *            via setAttribute. Children may be nodes or strings.      */
+	function h(tag, attrs) {
+		var el = document.createElement(tag);
+		if (attrs) {
+			Object.keys(attrs).forEach(function (k) {
+				var v = attrs[k];
+				if (v == null) return;
+				if (k === "class") el.className = v;
+				else if (k === "text") el.textContent = v;
+				else if (k === "id") el.id = v;
+				else el.setAttribute(k, String(v));
+			});
+		}
+		for (var i = 2; i < arguments.length; i++) {
+			var c = arguments[i];
+			if (c == null) continue;
+			el.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+		}
+		return el;
+	}
+
+	setup.ui = {
+		version: "2.0.0",
+		h: h,
+
+		/* Re-render all data-passage panels (left/right sidebars). */
+		refresh: function () {
+			try { UI.update(); } catch (ex) { console.error("[ui] refresh failed:", ex); }
+		}
+	};
+
+	/* --- Media resolver -------------------------------------------------- */
+	setup.media = {
+		base: "media/",
+		ext: ".png",
+		map: Object.create(null),   // optional explicit overrides: id -> url
+
+		resolve: function (id) {
+			if (id == null) return "";
+			id = String(id);
+			if (!id) return "";
+			if (this.map[id]) return this.map[id];
+			// Already a URL or explicit path — use as-is.
+			if (/^(?:[a-z]+:)?\/\//i.test(id) || /^(?:data:|blob:|\.|\/)/i.test(id)) return id;
+			return this.base + id + this.ext;
+		}
+	};
+})();

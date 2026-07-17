@@ -1,0 +1,17 @@
+:: Inventory [nobr]
+/%
+	Floating-window tab content (auto-registered because this passage
+	exists). Replace with your real inventory UI. Any widget macro works
+	here, and plain SugarCube markup too.
+%/
+<<uiCard "Pack">>
+	<<uiValue "Gold" $gold "g">>
+	<<uiLabel "Your pack is empty.">>
+<</uiCard>>
+
+:: Quests [nobr]
+/% Floating-window tab content. Replace with your real quest log. %/
+<<uiCard "Quests">>
+	<<uiCheck "Find out where you are" true>>
+	<<uiCheck "Escape this world" false>>
+<</uiCard>>

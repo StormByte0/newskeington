@@ -1,0 +1,25 @@
+:: StoryInit
+/% Demo state so the example PanelRight widgets have something to show.
+   Replace with your game's own variables. %/
+<<set $gold = 120>>
+<<set $hp = 34, $maxhp = 100>>
+<<set $mp = 12, $maxmp = 40>>
+<<set $poisoned = false, $blessed = true>>
+
+:: Start
+You wake up face-down in a field that definitely isn't yours.
+
+/%
+	Everything on screen is driven by passages you can edit:
+
+	  PanelLeft / PanelRight → sidebars (re-render every passage)
+	  <<scene "bg" "forest_clearing">> → set scene layers
+	  <<scene "sprites" "alice" "merchant">> → characters, evenly spaced
+	  <<avatarset "body_hair" "hair_red_long">> → change portrait layers
+	  <<uiRefresh>> → re-render panels after mid-passage $var changes
+
+	JS side: setup.scene, setup.avatar, setup.actions, setup.ui.
+	See README.md for the full API.
+%/
+
+[[Sleep again|Start]]
