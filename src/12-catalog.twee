@@ -1,21 +1,76 @@
 :: ItemCatalog [script]
 /* =========================================================================
- * Sample item catalog.
+ * Item catalog — static definitions registered at startup.
  *
- * Each call to setup.items.register(id, def) adds an item to the static
- * catalog. The catalog is read at render time by <<inventoryView>>; the
- * state ($inventory / $equipped) only stores item ids.
+ * ═══════════════════════════════════════════════════════════════════════
+ * WHY JS, NOT STORYINIT?
+ * ═══════════════════════════════════════════════════════════════════════
+ * The catalog lives in JS (not in StoryInit $vars) because:
+ *  1. Functions (onUse, onEquip, onEquip) CANNOT be stored in $vars —
+ *     SugarCube strips them during save serialization.
+ *  2. $vars bloat every save file; JS catalog lives in code only.
+ *  3. JS [script] passages run once at load; StoryInit re-runs on every
+ *     save load / restart.
+ * The catalog is AUTHOR-EDITED here, then referenced by id from $inventory
+ * in StoryInit and from story passages via <<itemAdd "id">>.
+ * ═══════════════════════════════════════════════════════════════════════
  *
- * Equipable apparel items drive the avatar: def.avatarLayer names one of
- * the layers configured in 06-avatar.twee. When equipped, the layer is
- * set to def.avatarImage; when unequipped, the layer is cleared.
+ * ITEM DEFINITION TEMPLATE (copy-paste this):
  *
- * onUse / onEquip / onUnequip receive { item, state } where state is the
- * live State.variables object — mutate it directly to update stats.
+ *   setup.items.register("item_id", {
+ *       name: "Display Name",
+ *       description: "Flavour text shown in the item view panel.",
+ *       type: "consumable",          // consumable | apparel | weapon | key_item | ...
+ *       tags: ["healing", "common"], // free-form, used for search/filter
+ *       thumbnail: "item_id",        // media id, resolves to media/<id>.png
+ *       consumable: true,            // removed from inventory after onUse
+ *       actions: { use: true, transfer: false },
+ *       onUse: function (ctx) {
+ *           // ctx.item = the item def, ctx.state = State.variables
+ *           var v = ctx.state;
+ *           v.hp = Math.min((v.hp || 0) + 50, v.maxhp || 100);
+ *       }
+ *   });
  *
- * Item tags (def.tags) feed the multi-select tag filter in the inventory
- * panel. They are free-form strings; pick whatever vocabulary your game
- * uses (rarity, school of magic, material, function, …).
+ *   setup.items.register("equippable_id", {
+ *       name: "Display Name",
+ *       description: "Flavour text.",
+ *       type: "apparel",
+ *       tags: ["clothing", "uncommon"],
+ *       thumbnail: "equippable_id",
+ *       equipable: true,
+ *       equipSlot: "apparel_top",     // must match a slot name
+ *       avatarLayer: "apparel_top",   // avatar layer to drive when equipped
+ *       avatarImage: "equippable_id", // image id set on that avatar layer
+ *       actions: {},
+ *       onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 15; },
+ *       onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 15; }
+ *   });
+ *
+ * Fields:
+ *   id           — unique string id (first arg to register)
+ *   name         — display name
+ *   description  — flavour text (shown in item view panel)
+ *   type         — item type (drives the type-tab filter)
+ *   tags         — array of strings (drives the search filter)
+ *   thumbnail    — media id (resolved via setup.media; defaults to media/<id>.png)
+ *   consumable   — if true, item is removed from inventory after onUse
+ *   equipable    — if true, item can be equipped
+ *   equipSlot    — slot name (e.g. "apparel_top", "weapon", "accessory")
+ *   avatarLayer  — avatar layer to set when equipped (must match 06-avatar.twee config)
+ *   avatarImage  — image id to set on that avatar layer
+ *   actions      — { use: bool, transfer: bool } controls which action buttons show
+ *   onUse        — function(ctx) called when player clicks Use
+ *   onEquip      — function(ctx) called when item is equipped
+ *   onUnequip    — function(ctx) called when item is unequipped
+ *   ctx = { item: <def>, state: <State.variables> }
+ *
+ * Give items to the player from story passages:
+ *   <<itemAdd "item_id" 2>>
+ * Remove items:
+ *   <<itemRemove "item_id" 1>>
+ * Check if player has an item:
+ *   <<if setup.inventory.has("item_id")>> ... <</if>>
  * ========================================================================= */
 (function () {
         "use strict";
@@ -195,16 +250,49 @@
 
 :: QuestCatalog [script]
 /* =========================================================================
- * Sample quest catalog.
+ * Quest catalog — static definitions registered at startup.
  *
- * Subquest status functions read State.variables and return one of:
- *   "not_started" | "in_progress" | "completed" | "failed"
+ * QUEST DEFINITION TEMPLATE (copy-paste this):
  *
- * The quest's overall status is derived: completed if in $quests.completed,
- * failed if any subquest fails, otherwise active.
+ *   setup.quests.register("quest_id", {
+ *       title: "Quest Title",
+ *       description: "Quest description shown in the quest log.",
+ *       subquests: [
+ *           {
+ *               id: "subquest_id",
+ *               title: "Subquest title (what the player needs to do)",
+ *               status: function () {
+ *                   // Read State.variables and return the status:
+ *                   // "not_started" | "in_progress" | "completed" | "failed"
+ *                   var v = State.variables;
+ *                   if (v.someFlag) return "completed";
+ *                   if (v.startedQuest) return "in_progress";
+ *                   return "not_started";
+ *               }
+ *           }
+ *       ],
+ *       onStart: function (state) {
+ *           // Optional: called when <<questStart "quest_id">> runs.
+ *           // state = State.variables. Mutate it to set up quest state.
+ *       },
+ *       onComplete: function (state) {
+ *           // Optional: called when <<questComplete "quest_id">> runs.
+ *           // Give rewards here: state.gold += 50, etc.
+ *       }
+ *   });
  *
- * Start a quest from any passage with <<questStart "id">> and complete it
- * with <<questComplete "id">>.
+ * Start/complete from story passages:
+ *   <<questStart "quest_id">>
+ *   <<questComplete "quest_id">>
+ *
+ * Check quest status:
+ *   <<if setup.quests.status("quest_id") == "active">> ... <</if>>
+ *
+ * Subquest status is VALIDATED at render time — the status() function
+ * reads $vars and returns the current state. This means subquests
+ * auto-advance as the player satisfies conditions, with no manual
+ * bookkeeping. Just set the flags from story passages:
+ *   <<set $foundTown = true>><<uiRefresh>>
  * ========================================================================= */
 (function () {
         "use strict";

@@ -1,0 +1,133 @@
+:: AuthorMacros [script]
+/* =========================================================================
+ * Module: author — passage-facing macros for state mutation.
+ *
+ * These macros let passage authors add items, equip/unequip, save/load
+ * outfits, and modify stats WITHOUT writing <<run>> or touching JS. Each
+ * macro wraps the corresponding setup.inventory / setup.outfits API call
+ * and auto-refreshes the UI (no manual <<uiRefresh>> needed).
+ *
+ * ┌─ CATALOG VS STORYINIT — PERFORMANCE ───────────────────────────────┐
+ * │                                                                     │
+ * │  The item/quest catalog stays in JS (12-catalog.twee) because:      │
+ * │  1. SugarCube strips functions from $vars during save serialization │
+ * │     — a StoryInit catalog would lose every onUse/onEquip/status().  │
+ * │  2. $vars bloat every save file; JS catalog lives in code only.     │
+ * │  3. JS [script] passages run once at load; StoryInit re-runs on     │
+ * │     every save load / restart.                                      │
+ * │  4. Read performance is identical (O(1) object lookup).             │
+ * │                                                                     │
+ * │  The catalog is AUTHOR-EDITED but not AUTHOR-RUN — authors add      │
+ * │  setup.items.register(...) calls to 12-catalog.twee using the       │
+ * │  template at the top of that file, then give items to the player    │
+ * │  via the <<itemAdd>> macro in story passages.                       │
+ * │                                                                     │
+ * │  RE-RENDER PERFORMANCE: setup.ui.refresh() re-wikifies all          │
+ * │  data-passage panels (~2ms each) + the open window tab (~5ms).      │
+ * │  Refreshes are coalesced (deferred via setTimeout, deduped) so      │
+ * │  multiple mutations in one tick produce one refresh. For this      │
+ * │  project's scale (~20 items, ~5 quests) the cost is trivial.        │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *
+ * MACRO REFERENCE (for passage authors):
+ *
+ *   <<itemAdd "potion_health" 2>>      Add 2 health potions to inventory
+ *   <<itemAdd "sword_iron">>           Add 1 sword (qty defaults to 1)
+ *   <<itemRemove "bread_loaf" 1>>      Remove 1 bread
+ *   <<equip "sword_iron">>             Equip an item (must be in inventory)
+ *   <<unequip "weapon">>               Unequip whatever's in the weapon slot
+ *   <<outfitSave "Battle">>            Save current equipment as "Battle"
+ *   <<outfitLoad "Battle">>            Load the "Battle" outfit preset
+ *   <<outfitDelete "Battle">>          Delete the "Battle" preset
+ *   <<statMod "gold" -50>>             Subtract 50 gold + refresh UI
+ *   <<statMod "hp" 30>>                Add 30 HP + refresh UI
+ *
+ *   For conditionals (no macro needed — use the setup API directly):
+ *     <<if setup.inventory.has("town_map")>> ... <</if>>
+ *     <<if setup.inventory.isEquipped("sword_iron")>> ... <</if>>
+ *     <<if setup.quests.status("find_magic_map") == "active">> ... <</if>>
+ *
+ *   For raw stat reads (standard SugarCube):
+ *     <<if $gold >= 50>> ... <</if>>
+ *     <<if $hp < $maxhp>> ... <</if>>
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        /* --- Item macros --- */
+
+        Macro.add("itemAdd", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<itemAdd "id" [qty]>>');
+                        var id = String(this.args[0]);
+                        var qty = this.args.length > 1 ? Number(this.args[1]) || 1 : 1;
+                        setup.inventory.add(id, qty);
+                }
+        });
+
+        Macro.add("itemRemove", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<itemRemove "id" [qty]>>');
+                        var id = String(this.args[0]);
+                        var qty = this.args.length > 1 ? Number(this.args[1]) || 1 : 1;
+                        setup.inventory.remove(id, qty);
+                }
+        });
+
+        /* --- Equipment macros --- */
+
+        Macro.add("equip", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<equip "itemId">>');
+                        setup.inventory.equip(String(this.args[0]));
+                }
+        });
+
+        Macro.add("unequip", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<unequip "slot">>');
+                        setup.inventory.unequip(String(this.args[0]));
+                }
+        });
+
+        /* --- Outfit macros --- */
+
+        Macro.add("outfitSave", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<outfitSave "name">>');
+                        setup.outfits.save(String(this.args[0]));
+                }
+        });
+
+        Macro.add("outfitLoad", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<outfitLoad "name">>');
+                        setup.outfits.load(String(this.args[0]));
+                }
+        });
+
+        Macro.add("outfitDelete", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<outfitDelete "name">>');
+                        setup.outfits["delete"](String(this.args[0]));
+                }
+        });
+
+        /* --- Stat modifier macro ---
+         *    Wraps <<set $var += value>> + <<uiRefresh>> into one call.
+         *    Use this when you want the UI to update immediately after
+         *    changing a stat. For non-numeric stats or complex logic,
+         *    use <<set $var = ...>> + <<uiRefresh>> directly. */
+        Macro.add("statMod", {
+                handler: function () {
+                        if (this.args.length < 2) return this.error('usage: <<statMod "varName" delta>>');
+                        var varName = String(this.args[0]);
+                        var delta = Number(this.args[1]);
+                        if (isNaN(delta)) return this.error("statMod: delta must be a number");
+                        var v = State.variables;
+                        var current = Number(v[varName]) || 0;
+                        v[varName] = current + delta;
+                        setup.ui.refresh();
+                }
+        });
+})();

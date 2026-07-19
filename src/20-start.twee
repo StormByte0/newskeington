@@ -1,12 +1,49 @@
 :: StoryInit
 /%
-        Demo state so the example PanelRight widgets have something to show,
-        plus the inventory / equipped / outfits / quests state.
+        ════════════════════════════════════════════════════════════════════
+        STORYINIT — STATE TEMPLATE
+        ════════════════════════════════════════════════════════════════════
 
-        The item and quest *catalogs* (full definitions, thumbnails, action
-        handlers) are registered in 13-catalog.twee. This passage only
-        initializes the *state* — i.e. which catalog entries the player
-        currently owns / has active.
+        This passage initializes the player's live state ($vars). Per the
+        project's data architecture:
+
+        — CATALOGS (item/quest definitions with handlers) live in JS:
+          12-catalog.twee via setup.items.register() / setup.quests.register().
+          They CANNOT go here because SugarCube strips functions from $vars
+          during save serialization.
+
+        — STATE (what the player owns, quest progress, stats) lives here as
+          $vars. This is save/rewind-safe.
+
+        — MUTATION from passages uses author macros (no JS needed):
+            <<itemAdd "potion_health" 2>>      add items
+            <<itemRemove "bread_loaf">>        remove items
+            <<equip "sword_iron">>             equip
+            <<unequip "weapon">>               unequip
+            <<statMod "gold" -50>>             modify stats + refresh
+            <<questStart "quest_id">>          start quest
+            <<questComplete "quest_id">>       complete quest
+            <<outfitSave "name">>              save outfit preset
+            <<outfitLoad "name">>              load outfit preset
+
+          For raw stat changes you can also use standard SugarCube:
+            <<set $gold -= 50>>
+            <<set $foundTown = true>>
+          followed by <<uiRefresh>> to update the UI.
+
+        — CONDITIONALS (no macro needed):
+            <<if setup.inventory.has("town_map")>> ... <</if>>
+            <<if setup.quests.status("quest_id") == "active">> ... <</if>>
+            <<if $gold >= 50>> ... <</if>>
+
+        See 14-author.twee for the full macro reference.
+        ════════════════════════════════════════════════════════════════════
+
+
+        ── 1. CHARACTER STATS ─────────────────────────────────────────────
+        Simple scalar values. Read by <<uiValue>> / <<uiProgress>> in
+        PanelRight. Modify via <<statMod "gold" -50>> or <<set $gold -= 50>>
+        + <<uiRefresh>>.
 %/
 <<set $gold = 120>>
 <<set $hp = 34, $maxhp = 100>>
@@ -14,7 +51,17 @@
 <<set $poisoned = false, $blessed = true>>
 <<set $attack = 0>>
 
-/% Inventory state: array of {id, qty}. IDs must exist in the item catalog. %/
+/%
+        ── 2. INVENTORY ────────────────────────────────────────────────────
+        Array of { id, qty }. Each id MUST exist in the item catalog
+        (setup.items, registered in 12-catalog.twee). The catalog holds
+        the full definition (name, description, thumbnail, actions); this
+        array only records WHAT the player has and HOW MANY.
+
+        Modify from passages:
+          <<itemAdd "potion_health" 2>>     give items
+          <<itemRemove "sword_iron">>       take items
+%/
 <<set $inventory = [
         { id: "potion_health", qty: 2 },
         { id: "potion_mana",   qty: 1 },
@@ -30,22 +77,69 @@
         { id: "amulet_strange",qty: 1 }
 ]>>
 
-/% Equipped state: slot -> itemId. Empty object = nothing equipped. %/
+/%
+        ── 3. EQUIPMENT ───────────────────────────────────────────────────
+        { slot: itemId, ... }. Slot names must match equipSlot in the
+        item catalog (e.g. "apparel_top", "weapon", "accessory").
+        Empty object = nothing equipped.
+
+        Modify from passages:
+          <<equip "sword_iron">>     equip (removes from $inventory)
+          <<unequip "weapon">>       unequip (returns to $inventory)
+%/
 <<set $equipped = {}>>
 
-/% Saved outfits: array of {name, equipped}. Starts empty. %/
+/%
+        ── 4. OUTFIT PRESETS ──────────────────────────────────────────────
+        Array of { name, equipped }. Each preset is a snapshot of the
+        $equipped object at save time. Starts empty.
+
+        Modify from passages:
+          <<outfitSave "Battle">>    save current equipment as a preset
+          <<outfitLoad "Battle">>    load a preset (re-equips everything)
+          <<outfitDelete "Battle">>  delete a preset
+%/
 <<set $outfitSets = []>>
 
-/% Quest state: only active/completed id lists. Catalog holds the rest. %/
+/%
+        ── 5. QUEST STATE ─────────────────────────────────────────────────
+        Only active/completed id lists. Quest DEFINITIONS (title,
+        description, subquests, status functions) live in the catalog
+        (setup.quests, registered in 12-catalog.twee).
+
+        Subquest status is VALIDATED at render time — each subquest's
+        status() function reads the $vars below and returns "not_started",
+        "in_progress", "completed", or "failed". This means subquests
+        auto-advance as the player satisfies conditions, with no manual
+        bookkeeping.
+
+        Modify from passages:
+          <<questStart "quest_id">>       start a quest
+          <<questComplete "quest_id">>    complete a quest
+%/
 <<set $quests = { active: [], completed: [] }>>
 
-/% Demo flags that subquest status() functions check. %/
+/%
+        ── 6. QUEST PROGRESS FLAGS ────────────────────────────────────────
+        These $vars are read by subquest status() functions in
+        12-catalog.twee. Set them from story passages to advance quest
+        state. Use <<set $flagName = true>> + <<uiRefresh>>, or
+        <<statMod "flagName" 1>> for numeric flags.
+
+        Pattern: name flags after the story event they represent. Group
+        them by quest in comments for readability.
+%/
+/% Quest: awaken_strange_land %/
 <<set $lookedAround = false>>
 <<set $foundTown = false>>
 <<set $knowsWorldName = false>>
+
+/% Quest: find_magic_map %/
 <<set $askedMerchant = false>>
 <<set $debtPaid = false>>
 <<set $hasMagicMap = false>>
+
+/% Quest: escape_this_world %/
 <<set $foundPortal = false>>
 <<set $portalOpen = false>>
 <<set $escaped = false>>
@@ -56,19 +150,28 @@ You wake up face-down in a field that definitely isn't yours.
 <<questStart "awaken_strange_land">>
 
 /%
-        Everything on screen is driven by passages you can edit:
+        ════════════════════════════════════════════════════════════════════
+        AUTHOR QUICK REFERENCE
+        ════════════════════════════════════════════════════════════════════
 
-          PanelLeft / PanelRight → sidebars (re-render every passage)
-          <<scene "bg" "forest_clearing">> → set scene layers
-          <<scene "sprites" "alice" "merchant">> → characters, evenly spaced
-          <<avatarset "body_hair" "hair_red_long">> → change portrait layers
-          <<uiRefresh>> → re-render panels after mid-passage $var changes
+        GIVE ITEMS:        <<itemAdd "potion_health" 2>>
+        TAKE ITEMS:        <<itemRemove "bread_loaf" 1>>
+        EQUIP:             <<equip "sword_iron">>
+        UNEQUIP:           <<unequip "weapon">>
+        SAVE OUTFIT:       <<outfitSave "Battle">>
+        LOAD OUTFIT:       <<outfitLoad "Battle">>
+        MODIFY STAT:       <<statMod "gold" -50>>     (auto-refreshes)
+        SET FLAG:          <<set $foundTown = true>><<uiRefresh>>
+        START QUEST:       <<questStart "quest_id">>
+        COMPLETE QUEST:    <<questComplete "quest_id">>
 
-        Inventory tab: <<inventoryView>> — pack grid + equipped column + outfit sets
-        Quests tab:    <<questLog>>    — catalog-driven quest log
+        CHECK INVENTORY:   <<if setup.inventory.has("town_map")>> ... <</if>>
+        CHECK EQUIPPED:    <<if setup.inventory.isEquipped("sword_iron")>> ... <</if>>
+        CHECK QUEST:       <<if setup.quests.status("quest_id") == "active">> ... <</if>>
+        CHECK STAT:        <<if $gold >= 50>> ... <</if>>
 
-        JS side: setup.items, setup.inventory, setup.outfits, setup.quests
-                 (see 11-inventory.twee, 12-quests.twee, 13-catalog.twee)
+        REFRESH UI:        <<uiRefresh>>    (after raw <<set>> changes)
+        ════════════════════════════════════════════════════════════════════
 %/
 
 [[Look around|LookAround]]
@@ -108,10 +211,16 @@ The town turns out to be a sleepy hamlet called Murkwell. A merchant waves you o
 [[Leave|Start]]
 
 :: PayDebt
-<<set $gold -= 50>>
+/%
+        Example: paying a debt costs gold, sets flags, and gives an item.
+        Note how <<statMod>> handles the gold change + refresh in one call,
+        and <<itemAdd>> handles the item + refresh in one call. The flag
+        changes use raw <<set>> + <<uiRefresh>> because they're booleans.
+%/
+<<statMod "gold" -50>>
 <<set $debtPaid = true>>
 <<set $hasMagicMap = true>>
-<<run setup.inventory.add("magic_map", 1)>>
+<<itemAdd "magic_map" 1>>
 <<uiRefresh>>
 
 The merchant hands you a folded parchment that shimmers faintly. The cartographer's magic map is yours.
