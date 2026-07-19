@@ -1,0 +1,285 @@
+:: StatusScript [script]
+/* =========================================================================
+ * Module: status — catalog-driven temporary conditions + willpower display.
+ *
+ * Mirrors the item/quest pattern: DEFINITIONS live in JS (functions, icons,
+ * kinds — can't go in $vars because SugarCube strips functions during save
+ * serialization); STATE lives in $status[] as a plain id array.
+ *
+ * ┌─ STATUS DEFINITION TEMPLATE ───────────────────────────────────────┐
+ * │                                                                     │
+ * │   setup.status.register("drunk", {                                  │
+ * │       label: "Drunk",                                               │
+ * │       icon:  "\uF046",      // sc-icons PUA glyph, emoji, or letter │
+ * │       kind:  "debuff",      // "buff" | "debuff"                    │
+ * │       description: "Slurred speech, clumsy hands, poor judgement."  │
+ * │   });                                                               │
+ * │                                                                     │
+ * │ Fields:                                                             │
+ * │   id           unique string id (first arg to register)             │
+ * │   label        display name shown on the badge                      │
+ * │   icon         optional glyph (PUA → sc-icons font; else plain)     │
+ * │   kind         "buff" (accent colour) or "debuff" (red)             │
+ * │   description  flavour text, shown in a tooltip                     │
+ * │                                                                     │
+ * │ Modify from story passages:                                         │
+ * │   <<statusAdd "drunk">>          add a status                       │
+ * │   <<statusRemove "drunk">>       remove a status                    │
+ * │                                                                     │
+ * │ Check from story passages:                                          │
+ * │   <<if setup.status.has("drunk")>> ... <</if>>                      │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *
+ * STATE (save/rewind-safe):
+ *   $status = [ "drunk", "blisters", ... ]   // just ids
+ *
+ * MACROS:
+ *   <<statusBadges>>     render the active statuses as badges (panels)
+ *   <<willpowerPips>>    render willpower as discrete filled pips
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[status] setup.ui not ready — deferring macro registration");
+                return;
+        }
+
+        var h = setup.ui.h;
+        function V() { return State.variables; }
+
+        function ensureState() {
+                var v = V();
+                if (!Array.isArray(v.status)) v.status = [];
+                return v;
+        }
+
+        var pending = false;
+        function refresh() {
+                if (pending) return;
+                pending = true;
+                setTimeout(function () { pending = false; setup.ui.refresh(); }, 0);
+        }
+
+        /* =====================================================================
+         *  setup.status — catalog + state ops
+         * ===================================================================== */
+        setup.status = {
+                catalog: Object.create(null),
+
+                register: function (id, def) {
+                        if (!id) throw new Error("setup.status.register: id required");
+                        var base = {
+                                id: id, label: id, icon: "", kind: "debuff", description: ""
+                        };
+                        this.catalog[id] = Object.assign(base, def || {});
+                },
+                get:  function (id) { return this.catalog[id] || null; },
+                all:  function ()   { return Object.keys(this.catalog); },
+
+                add: function (id) {
+                        if (!this.get(id)) { console.warn("[status] unknown id:", id); return this; }
+                        ensureState();
+                        var v = V();
+                        if (v.status.indexOf(id) < 0) v.status.push(id);
+                        refresh();
+                        return this;
+                },
+                remove: function (id) {
+                        ensureState();
+                        var v = V();
+                        var idx = v.status.indexOf(id);
+                        if (idx >= 0) v.status.splice(idx, 1);
+                        refresh();
+                        return this;
+                },
+                has: function (id) {
+                        var v = V();
+                        return Array.isArray(v.status) && v.status.indexOf(id) >= 0;
+                },
+                active: function () {
+                        var v = V();
+                        return Array.isArray(v.status) ? v.status.slice() : [];
+                }
+        };
+
+        /* =====================================================================
+         *  Example status catalog — representative content.
+         *  Add real game statuses here following the template above.
+         * ===================================================================== */
+        setup.status.register("drunk", {
+                label: "Drunk", icon: "\uF046", kind: "debuff",
+                description: "Slurred speech, clumsy hands, poor judgement."
+        });
+        setup.status.register("hungover", {
+                label: "Hungover", icon: "\uF073", kind: "debuff",
+                description: "Headache, nausea, reduced stamina recovery."
+        });
+        setup.status.register("blisters", {
+                label: "Blisters", icon: "\uF07B", kind: "debuff",
+                description: "Painful feet from ill-fitting shoes."
+        });
+        setup.status.register("well_rested", {
+                label: "Well Rested", icon: "\uF004", kind: "buff",
+                description: "Refreshed and alert. Bonus to stamina and focus."
+        });
+        setup.status.register("exhausted", {
+                label: "Exhausted", icon: "\uF0E3", kind: "debuff",
+                description: "Pushed past your limits. Everything costs more."
+        });
+
+        /* =====================================================================
+         *  <<statusBadges>> — render active statuses as coloured badges.
+         *  Used in the right panel. Buffs use --ui-accent; debuffs use red.
+         *  Empty state shows a dim "No effects." line.
+         * ===================================================================== */
+        Macro.add("statusBadges", {
+                handler: function () {
+                        var active = setup.status.active();
+                        var el = h("div", { "class": "status-badges" });
+                        if (active.length === 0) {
+                                el.appendChild(h("div", { "class": "status-empty", text: "No effects." }));
+                                this.output.appendChild(el);
+                                return;
+                        }
+                        active.forEach(function (id) {
+                                var def = setup.status.get(id);
+                                if (!def) return;
+                                var badge = h("span", {
+                                        "class": "status-badge status-badge--" + def.kind,
+                                        title: def.description || def.label
+                                });
+                                if (def.icon) {
+                                        var isPUA = (function (cp) {
+                                                return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD);
+                                        })(def.icon.codePointAt(0));
+                                        var icon = h("span", {
+                                                "class": "status-badge__icon" + (isPUA ? " is-sc-icon" : ""),
+                                                "aria-hidden": "true",
+                                                text: def.icon
+                                        });
+                                        if (isPUA) icon.style.fontFamily = "sc-icons";
+                                        badge.appendChild(icon);
+                                }
+                                badge.appendChild(h("span", { "class": "status-badge__label", text: def.label }));
+                                el.appendChild(badge);
+                        });
+                        this.output.appendChild(el);
+                }
+        });
+
+        /* =====================================================================
+         *  <<willpowerPips>> — discrete filled pips (cap = maxWillpower).
+         *  Reads $resources.willpower + $resources.maxWillpower. Default 10.
+         *  Renders N filled pips out of max, with a "v/max" readout.
+         * ===================================================================== */
+        Macro.add("willpowerPips", {
+                handler: function () {
+                        var v = V();
+                        var res = v.resources || {};
+                        var max = Number(res.maxWillpower) || 10;
+                        if (max < 1) max = 10;
+                        var val = Math.min(Math.max(Number(res.willpower) || 0, 0), max);
+
+                        var el = h("div", { "class": "wp-pips" });
+                        el.appendChild(h("span", { "class": "wp-pips__label", text: "Willpower" }));
+                        var row = h("span", { "class": "wp-pips__row" });
+                        for (var i = 0; i < max; i++) {
+                                row.appendChild(h("span", {
+                                        "class": "wp-pip" + (i < val ? " is-filled" : ""),
+                                        "aria-hidden": "true"
+                                }));
+                        }
+                        el.appendChild(row);
+                        el.appendChild(h("span", { "class": "wp-pips__count", text: val + "/" + max }));
+                        this.output.appendChild(el);
+                }
+        });
+})();
+
+:: StatusStyle [stylesheet]
+/* =========================================================================
+ * Status badges + willpower pips. Buffs use --ui-accent; debuffs use red
+ * (#e74c3c). No new palette tokens introduced.
+ * ========================================================================= */
+
+/* --- Status badges --- */
+.status-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: calc(var(--ui-unit) * 0.5);
+}
+.status-empty {
+        color: var(--ui-text-dim);
+        font-style: italic;
+        font-size: 85%;
+}
+.status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: calc(var(--ui-unit) * 0.375);
+        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 0.625);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        font-size: 80%;
+        line-height: 1.3;
+        background: var(--ui-bg);
+}
+.status-badge__icon {
+        font-style: normal;
+        line-height: 1;
+}
+.status-badge__label {
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+}
+.status-badge--buff {
+        border-color: var(--ui-accent);
+        color: var(--ui-accent);
+}
+.status-badge--debuff {
+        border-color: #e74c3c;
+        color: #e74c3c;
+}
+
+/* --- Improved willpower pips --- */
+.wp-pips {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--ui-unit) * 0.375);
+}
+.wp-pips__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+.wp-pips__label {
+    color: var(--ui-text-dim);
+    font-size: 85%;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.wp-pips__count {
+    font-size: 85%;
+    color: var(--ui-text-dim);
+    font-variant-numeric: tabular-nums;
+}
+.wp-pips__row {
+  …unit) * 0.375);
+    background: var(--ui-bg-raised);
+    border: 1px solid var(--ui-border);
+    border-radius: 4px;
+}
+.wp-pip {
+    width: calc(var(--ui-unit) * 0.875);
+    height: calc(var(--ui-unit) * 0.875);
+    background: #111;
+    border: 1px solid var(--ui-border);
+    border-radius: 2px;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.wp-pip.is-filled {
+    background: var(--ui-accent);
+    border-color: var(--ui-accent);
+    box-shadow: 0 0 0 1px var(--ui-accent);
+}

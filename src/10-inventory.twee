@@ -100,6 +100,7 @@
                                 tags: [],
                                 thumbnail: "", equipable: false, equipSlot: null,
                                 avatarLayer: null, avatarImage: null, consumable: false,
+                                descriptors: null,
                                 actions: { use: false, drop: false, transfer: false }
                         };
                         var merged = Object.assign(base, def || {});

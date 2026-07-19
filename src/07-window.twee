@@ -113,8 +113,10 @@
                 });
 
                 /* Convention tabs: exist as soon as the matching passage does. */
-                if (Story.has("Inventory")) setup.ui.registerTab({ id: "inventory", title: "Inventory", passage: "Inventory" });
-                if (Story.has("Quests"))    setup.ui.registerTab({ id: "quests",    title: "Quests",    passage: "Quests" });
+                if (Story.has("Inventory"))  setup.ui.registerTab({ id: "inventory",  title: "Inventory",  passage: "Inventory" });
+                if (Story.has("Quests"))     setup.ui.registerTab({ id: "quests",     title: "Quests",     passage: "Quests" });
+                if (Story.has("Stats"))      setup.ui.registerTab({ id: "stats",      title: "Stats",      passage: "Stats" });
+                if (Story.has("Appearance")) setup.ui.registerTab({ id: "appearance", title: "Appearance", passage: "Appearance" });
 
                 /* Keep the open tab in sync with panel refreshes. */
                 jQuery(document).on(":uiupdate", function () {

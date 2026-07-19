@@ -122,6 +122,10 @@
                 label: "Quests", icon: "\uF14A",
                 handler: function () { setup.ui.openWindow("quests"); }
         });
+        setup.actions.register("stats", {
+                label: "Stats", icon: "\uF080",
+                handler: function () { setup.ui.openWindow("stats"); }
+        });
 })();
 
 :: ActionStyle [stylesheet]

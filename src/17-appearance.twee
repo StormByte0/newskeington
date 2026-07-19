@@ -1,0 +1,256 @@
+:: AppearanceScript [script]
+/* =========================================================================
+ * Module: appearance — body + apparel description panel.
+ *
+ * Two read-only cards:
+ *   1. Body  — derived description text from $body fields. The raw numbers
+ *      (muscle, skin, hairLength, …) map to adjective phrases via
+ *      setup.appearance.describeBody(). Player never sees the digits; they
+ *      see a readable sentence.
+ *   2. Apparel — iterates $equipped, looks each id up in the item catalog
+ *      (setup.items), and shows name + slot + any descriptors the catalog
+ *      entry provides. Descriptors come from the catalog's optional
+ *      `descriptors: { fit:"tight", material:"cotton", … }` field.
+ *
+ * OPENED FROM: the "appearance" action button under the avatar canvas in
+ * PanelRight (registered below).
+ *
+ * MACROS:
+ *   <<appearancePanel>>    render the full Appearance panel (Stats tab)
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[appearance] setup.ui not ready — deferring macro registration");
+                return;
+        }
+
+        var h = setup.ui.h;
+        function V() { return State.variables; }
+
+        function clamp(n, lo, hi) { return Math.min(Math.max(n, lo), hi); }
+
+        /* =====================================================================
+         *  setup.appearance — body description derivation
+         *
+         *  Maps $body field values (0–100) to adjective phrases. Add or edit
+         *  entries here to tune the prose. Each field produces one phrase;
+         *  phrases are joined into a single readable sentence.
+         * ===================================================================== */
+        function band(value, ranges) {
+                /* ranges: [[hi, "label"], [hi, "label"], ...] sorted ascending */
+                for (var i = 0; i < ranges.length; i++) {
+                        if (value <= ranges[i][0]) return ranges[i][1];
+                }
+                return ranges[ranges.length - 1][1];
+        }
+
+        var BODY_PHRASES = {
+                /* muscle: 0 frail … 100 powerfully built */
+                muscle: function (v) {
+                        return band(v, [
+                                [20, "frail"], [40, "slender"], [60, "of average build"],
+                                [80, "toned"], [101, "powerfully built"]
+                        ]) + " build";
+                },
+                /* skin: 0 poor … 100 radiant */
+                skin: function (v) {
+                        return band(v, [
+                                [25, "a sallow"], [50, "a clear"], [75, "a smooth"], [101, "a radiant"]
+                        ]) + " complexion";
+                },
+                /* hairLength: 0 bald … 100 very long */
+                hairLength: function (v) {
+                        return band(v, [
+                                [5, "shaved"], [20, "cropped"], [40, "short"],
+                                [60, "shoulder-length"], [80, "long"], [101, "very long"]
+                        ]) + " hair";
+                },
+                /* hairQuality: 0 damaged … 100 lustrous */
+                hairQuality: function (v) {
+                        return band(v, [
+                                [30, "brittle"], [60, "neat"], [80, "healthy"], [101, "lustrous"]
+                        ]);
+                },
+                /* shoulders: 0 narrow … 100 broad */
+                shoulders: function (v) {
+                        return band(v, [[30, "narrow"], [60, "average"], [101, "broad"]]) + " shoulders";
+                }
+        };
+
+        /* Slot label prettifier — apparel_bottom → "Apparel bottom". */
+        function prettySlot(slot) {
+                return slot.charAt(0).toUpperCase() + slot.slice(1).replace(/_/g, " ");
+        }
+
+        setup.appearance = {
+                describeBody: function (body) {
+                        body = body || {};
+                        var phrases = [];
+                        Object.keys(BODY_PHRASES).forEach(function (field) {
+                                var v = Number(body[field]);
+                                if (!isNaN(v)) phrases.push(BODY_PHRASES[field](clamp(v, 0, 100)));
+                        });
+                        if (phrases.length === 0) return "No body description available.";
+                        /* Join all but the last with commas; the last with "and". */
+                        if (phrases.length === 1) return phrases[0] + ".";
+                        return phrases.slice(0, -1).join(", ") + ", and " + phrases[phrases.length - 1] + ".";
+                }
+        };
+
+        /* =====================================================================
+         *  "appearance" action — opens the Appearance tab. Placed in
+         *  PanelRight under the avatar via <<uiAction "appearance">>.
+         * ===================================================================== */
+        if (setup.actions) {
+                setup.actions.register("appearance", {
+                        label: "Appearance", icon: "\uF007",
+                        handler: function () { setup.ui.openWindow("appearance"); }
+                });
+        }
+
+        /* =====================================================================
+         *  <<appearancePanel>> — render Body + Apparel cards.
+         * ===================================================================== */
+        Macro.add("appearancePanel", {
+                handler: function () {
+                        var v = V();
+                        var root = h("div", { "class": "appearance-panel" });
+
+                        /* --- Body card --- */
+                        var bodyCard = h("section", { "class": "ui-card appearance-body" });
+                        bodyCard.appendChild(h("header", { "class": "ui-card__title" }, "Body"));
+                        var bodyBody = h("div", { "class": "ui-card__body" });
+                        bodyBody.appendChild(h("p", {
+                                "class": "appearance-body__desc",
+                                text: setup.appearance.describeBody(v.body)
+                        }));
+                        bodyCard.appendChild(bodyBody);
+                        root.appendChild(bodyCard);
+
+                        /* --- Apparel card --- */
+                        var apparelCard = h("section", { "class": "ui-card appearance-apparel" });
+                        apparelCard.appendChild(h("header", { "class": "ui-card__title" }, "Apparel"));
+                        var apparelBody = h("div", { "class": "ui-card__body" });
+
+                        var equipped = v.equipped || {};
+                        var slots = Object.keys(equipped).sort();
+                        if (slots.length === 0) {
+                                apparelBody.appendChild(h("div", {
+                                        "class": "appearance-empty",
+                                        text: "Nothing equipped."
+                                }));
+                        } else {
+                                slots.forEach(function (slot) {
+                                        var itemId = equipped[slot];
+                                        var def = setup.items && setup.items.get(itemId);
+                                        var row = h("div", { "class": "apparel-slot" });
+                                        row.appendChild(h("span", {
+                                                "class": "apparel-slot__slot",
+                                                text: prettySlot(slot)
+                                        }));
+                                        if (def) {
+                                                row.appendChild(h("span", {
+                                                        "class": "apparel-slot__name",
+                                                        text: def.name
+                                                }));
+                                                /* Descriptors as small tags. */
+                                                if (def.descriptors) {
+                                                        var keys = Object.keys(def.descriptors);
+                                                        keys.forEach(function (dk) {
+                                                                row.appendChild(h("span", {
+                                                                        "class": "apparel-descriptor",
+                                                                        text: def.descriptors[dk]
+                                                                }));
+                                                        });
+                                                }
+                                        } else {
+                                                row.appendChild(h("span", {
+                                                        "class": "apparel-slot__name apparel-slot__name--unknown",
+                                                        text: itemId
+                                                }));
+                                        }
+                                        apparelBody.appendChild(row);
+                                });
+                        }
+                        apparelCard.appendChild(apparelBody);
+                        root.appendChild(apparelCard);
+
+                        this.output.appendChild(root);
+                }
+        });
+})();
+
+:: Appearance [nobr]
+/%
+        Floating-window tab content. Auto-registers as a tab because this
+        passage is named "Appearance" (see the convention in 07-window.twee).
+
+        Two cards: Body (derived description from $body) and Apparel
+        (equipped items + their catalog descriptors). Opened from the
+        Appearance button under the avatar in PanelRight.
+%/
+<<appearancePanel>>
+
+:: AppearanceStyle [stylesheet]
+/* =========================================================================
+ * Appearance panel — reuses ui-card primitives. No new palette tokens.
+ * ========================================================================= */
+.appearance-panel {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 1);
+        height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+}
+
+.appearance-body__desc {
+        margin: 0;
+        line-height: 1.6;
+        color: var(--ui-text);
+}
+.appearance-empty {
+        color: var(--ui-text-dim);
+        font-style: italic;
+        font-size: 90%;
+}
+
+/* --- Apparel slot rows --- */
+.apparel-slot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: calc(var(--ui-unit) * 0.625);
+        padding: calc(var(--ui-unit) * 0.5) 0;
+        border-bottom: 1px solid var(--ui-border);
+}
+.apparel-slot:last-child { border-bottom: none; }
+.apparel-slot__slot {
+        flex: 0 0 auto;
+        font-size: 80%;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ui-text-dim);
+        min-width: calc(var(--ui-unit) * 14);
+}
+.apparel-slot__name {
+        flex: 0 0 auto;
+        font-weight: bold;
+}
+.apparel-slot__name--unknown {
+        color: var(--ui-text-dim);
+        font-style: italic;
+        font-weight: normal;
+}
+.apparel-descriptor {
+        flex: 0 0 auto;
+        font-size: 75%;
+        color: var(--ui-text-dim);
+        background: var(--ui-bg-raised);
+        border: 1px solid var(--ui-border);
+        border-radius: 2px;
+        padding: 0 calc(var(--ui-unit) * 0.5);
+        line-height: 1.4;
+}

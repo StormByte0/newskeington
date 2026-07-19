@@ -40,7 +40,10 @@
  *   <<outfitLoad "Battle">>            Load the "Battle" outfit preset
  *   <<outfitDelete "Battle">>          Delete the "Battle" preset
  *   <<statMod "gold" -50>>             Subtract 50 gold + refresh UI
- *   <<statMod "hp" 30>>                Add 30 HP + refresh UI
+ *   <<statMod "resources.money" -50>>  Subtract 50 money (dotted path)
+ *   <<statMod "stats.str" 1>>          Add 1 Strength (dotted path)
+ *   <<statusAdd "drunk">>              Add the "drunk" status effect
+ *   <<statusRemove "drunk">>           Remove the "drunk" status effect
  *
  *   For conditionals (no macro needed — use the setup API directly):
  *     <<if setup.inventory.has("town_map")>> ... <</if>>
@@ -115,19 +118,60 @@
 
         /* --- Stat modifier macro ---
          *    Wraps <<set $var += value>> + <<uiRefresh>> into one call.
+         *    Accepts dotted paths into the nested data model:
+         *      <<statMod "resources.money" -50>>
+         *      <<statMod "stats.str" 1>>
+         *      <<statMod "resources.stamina" 20>>
+         *    Top-level names still work for backwards compatibility:
+         *      <<statMod "gold" -50>>
          *    Use this when you want the UI to update immediately after
          *    changing a stat. For non-numeric stats or complex logic,
-         *    use <<set $var = ...>> + <<uiRefresh>> directly. */
+         *    use <<set ...>> + <<uiRefresh>> directly. */
+        function resolvePath(root, path, create) {
+                var parts = path.split(".");
+                var node = root;
+                for (var i = 0; i < parts.length - 1; i++) {
+                        var key = parts[i];
+                        if (node[key] == null) {
+                                if (!create) return null;
+                                node[key] = {};
+                        }
+                        node = node[key];
+                }
+                return { node: node, key: parts[parts.length - 1] };
+        }
+
         Macro.add("statMod", {
                 handler: function () {
-                        if (this.args.length < 2) return this.error('usage: <<statMod "varName" delta>>');
-                        var varName = String(this.args[0]);
+                        if (this.args.length < 2) return this.error('usage: <<statMod "path" delta>>');
+                        var path  = String(this.args[0]);
                         var delta = Number(this.args[1]);
                         if (isNaN(delta)) return this.error("statMod: delta must be a number");
                         var v = State.variables;
-                        var current = Number(v[varName]) || 0;
-                        v[varName] = current + delta;
+                        var resolved = resolvePath(v, path, true);
+                        var current = Number(resolved.node[resolved.key]) || 0;
+                        resolved.node[resolved.key] = current + delta;
                         setup.ui.refresh();
+                }
+        });
+
+        /* --- Status macros ---
+         *    Add/remove temporary conditions (drunk, hungover, blisters…).
+         *    Status DEFINITIONS live in the status catalog (15-status.twee);
+         *    $status[] only records which ids are active. */
+        Macro.add("statusAdd", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<statusAdd "id">>');
+                        if (setup.status) setup.status.add(String(this.args[0]));
+                        else setup.ui.refresh();
+                }
+        });
+
+        Macro.add("statusRemove", {
+                handler: function () {
+                        if (!this.args.length) return this.error('usage: <<statusRemove "id">>');
+                        if (setup.status) setup.status.remove(String(this.args[0]));
+                        else setup.ui.refresh();
                 }
         });
 })();

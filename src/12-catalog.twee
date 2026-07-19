@@ -59,6 +59,9 @@
  *   equipSlot    — slot name (e.g. "apparel_top", "weapon", "accessory")
  *   avatarLayer  — avatar layer to set when equipped (must match 06-avatar.twee config)
  *   avatarImage  — image id to set on that avatar layer
+ *   descriptors  — optional { key: "value", ... } describing the item's appearance on equip
+ *                  (e.g. { fit:"tight", material:"cotton", color:"navy" }). Shown as
+ *                  small tags in the Appearance window. Free-form keys/values.
  *   actions      — { use: bool, transfer: bool } controls which action buttons show
  *   onUse        — function(ctx) called when player clicks Use
  *   onEquip      — function(ctx) called when item is equipped
@@ -129,6 +132,7 @@
                 equipSlot: "apparel_top",
                 avatarLayer: "apparel_top",
                 avatarImage: "tunic_cloth",
+                descriptors: { fit: "loose", material: "roughspun cotton", length: "hip-length" },
                 actions: {  },
                 onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 5;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
                 onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 5;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
@@ -144,6 +148,7 @@
                 equipSlot: "apparel_top",
                 avatarLayer: "apparel_top",
                 avatarImage: "armor_leather",
+                descriptors: { fit: "snug", material: "boiled leather", sheen: "dull" },
                 actions: {  },
                 onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 15; ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
                 onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 15; ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
@@ -159,6 +164,7 @@
                 equipSlot: "apparel_bottom",
                 avatarLayer: "apparel_bottom",
                 avatarImage: "trousers_linen",
+                descriptors: { fit: "straight", material: "linen", color: "undyed" },
                 actions: {  },
                 onEquip:   function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) + 2;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); },
                 onUnequip: function (ctx) { ctx.state.maxhp = (ctx.state.maxhp || 100) - 2;  ctx.state.hp = Math.min(ctx.state.hp, ctx.state.maxhp); }
@@ -174,6 +180,7 @@
                 equipSlot: "apparel_bottom",
                 avatarLayer: "apparel_bottom",
                 avatarImage: "boots_leather",
+                descriptors: { fit: "broken-in", material: "worn leather", sole: "flat" },
                 actions: {  }
         });
 

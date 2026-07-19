@@ -1,19 +1,38 @@
 :: PanelLeft [nobr]
 /%
-	Left sidebar — app controls. Rendered into #left-sidebar on every
-	passage display (data-passage) and on setup.ui.refresh().
+	Left sidebar — window controls + resource gauges.
 
-	Compose freely: any widget macro works here, plus plain SugarCube
-	markup (<<link>>, <<button>>, images, text). Only <<uiAction>>
-	buttons are interactive; everything else is read-only display.
+	Logical split (per design): the LEFT panel carries the active, managed
+	resources the player juggles every turn — stamina, stress, hunger,
+	hygiene, fatigue (progress bars), willpower (discrete pips, cap 10),
+	and money / debt (plain values). The right panel carries the avatar
+	and passive stuff (status effects, appearance).
+
+	Resources are always visible because managing them IS the game.
+	All values read from the nested $resources object (datamodal.md).
 %/
 <header><h1 id="story-title"><<= Story.title>></h1></header>
+<<uiSpacer>>
+
+<<uiCard "Resources">>
+	<<uiProgress "Stamina"  $resources.stamina  $resources.maxStamina  "#2ecc71">>
+	<<uiProgress "Stress"   $resources.stress   $resources.maxStress   "#e67e22">>
+	<<uiProgress "Hunger"   $resources.hunger   $resources.maxHunger   "#f39c12">>
+	<<uiProgress "Hygiene"  $resources.hygiene  $resources.maxHygiene  "#3498db">>
+	<<uiProgress "Fatigue"  $resources.fatigue  $resources.maxFatigue  "#9b59b6">>
+	<<uiDivider>>
+	<<willpowerPips>>
+	<<uiRow>>
+		<<uiValue "Money" $resources.money>>
+		<<uiValue "Debt" $resources.debt>>
+	<</uiRow>>
+<</uiCard>>
 <<uiContainer "windows">>
 	<<uiAction "inventory">>
 	<<uiAction "quests">>
+	<<uiAction "stats">>
 <</uiContainer>>
-<<uiSpacer>>
-<<uiContainer "defaults">>
+<<uiCard>>
 	<<uiRow>>
 		<<uiAction "back">>
 		<<uiAction "forward">>
@@ -21,20 +40,23 @@
 	<<uiAction "saves">>
 	<<uiAction "settings">>
 	<<uiAction "restart">>
-<</uiContainer>>
+<</uiCard>>
 
 :: PanelRight [nobr]
 /%
-	Right sidebar — character display. The avatar portrait mounts at the
-	top; the card below is an EXAMPLE built from the widget primitives —
-	replace it with your own stats, needs, effects, equipment, …
+	Right sidebar — avatar + passive character state.
+
+	The avatar canvas occupies the top half. Under it sits the Appearance
+	button (opens the Appearance tab: body description + apparel details).
+	Below that, active status effects render as coloured badges — buffs in
+	the accent colour, debuffs in red. A compact equipped-count line gives
+	a glanceable teaser of the full Appearance window.
 %/
 <<avatarview>>
+<<uiAction "appearance">>
 <<uiCard "Status">>
-	<<uiValue "Gold" $gold "g">>
-	<<uiProgress "HP" $hp $maxhp "#c0392b">>
-	<<uiProgress "MP" $mp $maxmp "#2980b9">>
-	<<uiDivider "Conditions">>
-	<<uiCheck "Poisoned" $poisoned>>
-	<<uiCheck "Blessed" $blessed>>
+	<<statusBadges>>
+<</uiCard>>
+<<uiCard "Appearance">>
+	<<uiValue "Equipped" Object.keys($equipped || {}).length "items">>
 <</uiCard>>

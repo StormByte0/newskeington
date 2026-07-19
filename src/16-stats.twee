@@ -1,0 +1,217 @@
+:: StatsScript [script]
+/* =========================================================================
+ * Module: stats — read-only skill-stat overview for the Stats tab.
+ *
+ * Reads the nested data model ($stats, $jobs, $grooming, $addictions,
+ * $conditioning) and renders grouped ui-card sections. These are the
+ * "skill-type" stats — proficiency and long-term character state. The
+ * resource gauges (stamina, stress, money…) live in the sidebars instead.
+ *
+ * The Addictions group is auto-hidden when every addiction is clean
+ * (tolerance/dependence/withdrawal all 0) so a fresh character's tab
+ * isn't cluttered with empty badges.
+ *
+ * MACROS:
+ *   <<statsPanel>>     render the full stats panel (used by the Stats tab)
+ *
+ * The Stats tab auto-registers if a passage called "Stats" exists — see
+ * the convention in 07-window.twee.
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[stats] setup.ui not ready — deferring macro registration");
+                return;
+        }
+
+        var h = setup.ui.h;
+        function V() { return State.variables; }
+
+        /* --- Label lookups for human-readable keys -------------------------- */
+        var ATTR_LABELS = {
+                str: "Strength", dex: "Dexterity", con: "Constitution",
+                int: "Intelligence", wis: "Wisdom", cha: "Charisma"
+        };
+        function prettyLabel(key) {
+                return key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, " $1");
+        }
+        function labelsFor(obj, lookup) {
+                return Object.keys(obj || {}).map(function (k) {
+                        return { key: k, label: (lookup && lookup[k]) || prettyLabel(k), value: obj[k] };
+                });
+        }
+
+        /* --- Value row helpers ---------------------------------------------- */
+        function valueRow(item) {
+                var v = item.value == null ? 0 : item.value;
+                return h("div", { "class": "stats-row" },
+                        h("span", { "class": "stats-row__label", text: item.label }),
+                        h("span", { "class": "stats-row__value", text: String(v) })
+                );
+        }
+        function valueRows(items) {
+                var frag = document.createDocumentFragment();
+                items.forEach(function (item) { frag.appendChild(valueRow(item)); });
+                return frag;
+        }
+
+        function groupCard(title, bodyBuilder) {
+                var card = h("section", { "class": "ui-card stats-group" });
+                card.appendChild(h("header", { "class": "ui-card__title" }, title));
+                var body = h("div", { "class": "ui-card__body" });
+                bodyBuilder(body);
+                card.appendChild(body);
+                return card;
+        }
+
+        /* --- Addiction rendering ------------------------------------------- *
+         * Each addiction in $addictions has { tolerance, dependence, withdrawal }.
+         * We derive a 0–3 severity from the max of those three (0–33 → 1 pip,
+         * 34–66 → 2, 67+ → 3) and render a badge + pips. If the whole group is
+         * clean, the group is hidden entirely. */
+        function addictionSeverity(a) {
+                var max = Math.max(a.tolerance || 0, a.dependence || 0, a.withdrawal || 0);
+                if (max <= 0) return 0;
+                if (max < 34) return 1;
+                if (max < 67) return 2;
+                return 3;
+        }
+        function addictionMaxSeverity() {
+                var v = V();
+                var add = v.addictions || {};
+                var worst = 0;
+                Object.keys(add).forEach(function (k) {
+                        var s = addictionSeverity(add[k]);
+                        if (s > worst) worst = s;
+                });
+                return worst;
+        }
+        function renderAddiction(key, addiction) {
+                var sev = addictionSeverity(addiction);
+                var badge = h("div", { "class": "addiction-badge" });
+                badge.appendChild(h("span", { "class": "addiction-badge__label", text: prettyLabel(key) }));
+                var pips = h("span", { "class": "addiction-pips" });
+                for (var i = 0; i < 3; i++) {
+                        pips.appendChild(h("span", { "class": "addiction-pip" + (i < sev ? " is-filled" : "") }));
+                }
+                badge.appendChild(pips);
+                return badge;
+        }
+
+        /* =====================================================================
+         *  <<statsPanel>> — full panel render
+         * ===================================================================== */
+        Macro.add("statsPanel", {
+                handler: function () {
+                        var v = V();
+                        var root = h("div", { "class": "stats-panel" });
+
+                        /* Attributes */
+                        root.appendChild(groupCard("Attributes", function (body) {
+                                body.appendChild(valueRows(labelsFor(v.stats, ATTR_LABELS)));
+                        }));
+
+                        /* Jobs */
+                        root.appendChild(groupCard("Jobs", function (body) {
+                                body.appendChild(valueRows(labelsFor(v.jobs)));
+                        }));
+
+                        /* Grooming */
+                        root.appendChild(groupCard("Grooming", function (body) {
+                                body.appendChild(valueRows(labelsFor(v.grooming)));
+                        }));
+
+                        /* Addictions — hidden entirely if all clean. */
+                        if (addictionMaxSeverity() > 0) {
+                                root.appendChild(groupCard("Addictions", function (body) {
+                                        var add = v.addictions || {};
+                                        var wrap = h("div", { "class": "addiction-list" });
+                                        Object.keys(add).forEach(function (key) {
+                                                if (addictionSeverity(add[key]) > 0) {
+                                                        wrap.appendChild(renderAddiction(key, add[key]));
+                                                }
+                                        });
+                                        body.appendChild(wrap);
+                                }));
+                        }
+
+                        /* Conditioning */
+                        root.appendChild(groupCard("Conditioning", function (body) {
+                                body.appendChild(valueRows(labelsFor(v.conditioning)));
+                        }));
+
+                        this.output.appendChild(root);
+                }
+        });
+})();
+
+:: Stats [nobr]
+/%
+        Floating-window tab content. Auto-registers as a tab because this
+        passage is named "Stats" (see the convention in 07-window.twee).
+
+        Read-only overview of the skill-type stats: Attributes, Jobs,
+        Grooming, Addictions, Conditioning. Resource gauges (stamina, stress,
+        money…) are NOT shown here — those live in the always-visible panels.
+%/
+<<statsPanel>>
+
+:: StatsStyle [stylesheet]
+/* =========================================================================
+ * Stats panel — reuses ui-card primitives. Read-only. No new palette tokens.
+ * ========================================================================= */
+.stats-panel {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 1);
+        height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+}
+.stats-group { flex: 0 0 auto; }
+
+.stats-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: calc(var(--ui-unit) * 1);
+        line-height: 1.4;
+}
+.stats-row__label { color: var(--ui-text-dim); }
+.stats-row__value { font-weight: bold; }
+
+/* --- Addictions --- */
+.addiction-list {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--ui-unit) * 0.5);
+}
+.addiction-badge {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: calc(var(--ui-unit) * 1);
+        padding: calc(var(--ui-unit) * 0.375) calc(var(--ui-unit) * 0.625);
+        border: 1px solid var(--ui-border);
+        border-radius: 3px;
+        background: var(--ui-bg);
+}
+.addiction-badge__label {
+        font-size: 90%;
+}
+.addiction-pips {
+        display: flex;
+        gap: calc(var(--ui-unit) * 0.375);
+}
+.addiction-pip {
+        width: calc(var(--ui-unit) * 1);
+        height: calc(var(--ui-unit) * 1);
+        background: #111;
+        border: 1px solid var(--ui-border);
+        border-radius: 50%;
+}
+.addiction-pip.is-filled {
+        background: #e74c3c;
+        border-color: #e74c3c;
+}
