@@ -157,7 +157,7 @@
 
         /* --- Status macros ---
          *    Add/remove temporary conditions (drunk, hungover, blisters…).
-         *    Status DEFINITIONS live in the status catalog (15-status.twee);
+         *    Status DEFINITIONS live in the status catalog (in 03-widgets.twee);
          *    $status[] only records which ids are active. */
         Macro.add("statusAdd", {
                 handler: function () {
