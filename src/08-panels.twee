@@ -22,10 +22,10 @@
 	<<uiProgress "Fatigue"  $resources.fatigue  $resources.maxFatigue  "#9b59b6">>
 	<<uiDivider>>
 	<<willpowerPips>>
-	<<uiRow>>
+	<<uiGrid>>
 		<<uiValue "Money" $resources.money>>
 		<<uiValue "Debt" $resources.debt>>
-	<</uiRow>>
+	<</uiGrid>>
 <</uiCard>>
 <<uiContainer "windows">>
 	<<uiAction "inventory">>
@@ -33,10 +33,10 @@
 	<<uiAction "stats">>
 <</uiContainer>>
 <<uiCard>>
-	<<uiRow>>
+	<<uiGrid>>
 		<<uiAction "back">>
 		<<uiAction "forward">>
-	<</uiRow>>
+	<</uiGrid>>
 	<<uiAction "saves">>
 	<<uiAction "settings">>
 	<<uiAction "restart">>

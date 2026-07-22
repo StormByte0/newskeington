@@ -358,199 +358,416 @@
                         this.output.appendChild(el);
                 }
         });
+        /* =====================================================================
+        *  Extra primitives — notes, lists, stat grids, inline tags.
+        * ===================================================================== */
+
+        Macro.add("uiNote", {
+                handler: function () {
+                        this.output.appendChild(h("div", { "class": "ui-note", text: txt(this.args[0]) }));
+                }
+        });
+
+        Macro.add("uiList", {
+                tags: [],
+                handler: function () {
+                        var el = h("ul", { "class": "ui-list" });
+                        this.output.appendChild(el);
+                        wikifyContents(el, this.payload[0].contents);
+                }
+        });
+
+        Macro.add("uiItem", {
+                handler: function () {
+                        var li = h("li", { "class": "ui-list__item" });
+                        this.output.appendChild(li);
+                        wikifyContents(li, txt(this.args[0]));
+                }
+        });
+
+        Macro.add("uiGrid", {
+                tags: [],
+                handler: function () {
+                        var el = h("div", { "class": "ui-grid" });
+                        this.output.appendChild(el);
+                        wikifyContents(el, this.payload[0].contents);
+                }
+        });
+
+        Macro.add("uiStat", {
+                handler: function () {
+                        if (this.args.length < 2) return this.error("usage: <<uiStat value label>>");
+                        this.output.appendChild(
+                                h("div", { "class": "ui-stat" },
+                                        h("div", { "class": "ui-stat__value" }, fmt(this.args[0])),
+                                        h("div", { "class": "ui-stat__label" }, txt(this.args[1])))
+                        );
+                }
+        });
+
+        Macro.add("uiTag", {
+                handler: function () {
+                        var kind = txt(this.args[1]);
+                        var cls  = "ui-tag" + (kind ? " ui-tag--" + kind : "");
+                        this.output.appendChild(h("span", { "class": cls, text: txt(this.args[0]) }));
+                }
+        });
 })();
 
 :: WidgetStyle [stylesheet]
 /* =========================================================================
- * Widget primitives — visual styles. All read-only. All dimensions are
- * multiples of --ui-unit (defined in 01-shell.twee) so they scale with the
- * viewport and the user's UI-scale setting.
+ * Widget primitives — visual styles.
  *
- * TABLE LANGUAGE: data rows share the .ui-row-line class — a flex row with
- * a faint bottom border (rgba over --ui-border) so attributes read as a
- * scannable table. Low-visibility but present.
+ *   - em-based sizing: scales with the sidebar font size, reflows at any
+ *     #ui-bar width. Nothing fixed-width that can outrun a narrow panel.
+ *   - Stock SugarCube look: grays, hairline borders, square corners, one
+ *     muted accent. No gradients, no color-mix.
+ *   - Table language: .ui-row-line rows share a hairline bottom border;
+ *     the last row of any block drops it.
+ *   - Progress bars are bordered TRACKS (margin + border + inner padding)
+ *     so stacked bars never merge. The fill is the author's colour at
+ *     full strength — text overlays it, so the author owns the contrast.
+ *   - In a uiGrid, uiValue cells auto-group into centred value/label
+ *     stacks, and gridlines use the real border colour for definition.
  * ========================================================================= */
 
-/* --- Containers --- */
-.ui-container { display: flex; flex-direction: column; gap: calc(var(--ui-unit) * 0.75); }
+/* --- Containers ---------------------------------------------------------- */
+
+.ui-container {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4em;
+	margin: 0 0 0.6em;
+	min-width: 0;
+}
+
 .ui-container__title {
-        margin: 0;
-        font-size: 95%;
-        font-weight: normal;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--ui-text-dim);
+	margin: 0;
+	padding: 0 0 0.25em;
+	border-bottom: 1px solid var(--ui-border, #444);
+	font-size: 0.8em;
+	font-weight: bold;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-dim, #9a9a9a);
 }
 
 .ui-card {
-        background: var(--ui-bg-raised);
-        border: 1px solid var(--ui-border);
-        border-radius: 4px;
+	min-width: 0;
+	background: var(--ui-bg-raised, #161616);
+	border: 1px solid var(--ui-border, #444);
 }
+
 .ui-card__title {
-        padding: calc(var(--ui-unit) * 0.75) calc(var(--ui-unit) * 1.25);
-        border-bottom: 1px solid var(--ui-border);
-        font-size: 90%;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--ui-text-dim);
+	padding: 0.35em 0.7em;
+	border-bottom: 1px solid var(--ui-border, #444);
+	font-size: 0.8em;
+	font-weight: bold;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-dim, #9a9a9a);
 }
+
 .ui-card__body {
-        padding: calc(var(--ui-unit) * 0.25) calc(var(--ui-unit) * 1.25);
-        display: flex;
-        flex-direction: column;
+	padding: 0.15em 0.7em;
+	min-width: 0;
 }
 
-.ui-row { display: flex; gap: calc(var(--ui-unit) * 0.75); }
-.ui-row > * { flex: 1 1 0; min-width: 0; }
+.ui-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5em;
+	margin: 0.2em 0;
+	min-width: 0;
+}
+.ui-row > * { flex: 1 1 auto; min-width: 0; }
 
-/* --- Shared table-row primitive --------------------------------------- *
- * Every data leaf is a flex row with space-between label/value and a faint
- * bottom border. The last child in a card has no border (clean edge).      */
+/* --- Shared table-row primitive ------------------------------------------- */
+
 .ui-row-line {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: calc(var(--ui-unit) * 1);
-        padding: calc(var(--ui-unit) * 0.625) 0;
-        border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 60%, transparent);
-        line-height: 1.3;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.25em 0.75em;
+	padding: 0.3em 0;
+	border-bottom: 1px solid var(--ui-border-faint, #2c2c2c);
+	line-height: 1.35;
+	min-width: 0;
 }
-.ui-row-line:last-child { border-bottom: none; }
+.ui-row-line:last-child { border-bottom: 0; }
 
-.ui-label { line-height: 1.4; }
+.ui-label { line-height: 1.4; overflow-wrap: break-word; }
 
-/* --- Label / value --- */
-.ui-value__label { color: var(--ui-text-dim); }
-.ui-value__value { font-weight: bold; }
-.ui-value__unit  { font-weight: normal; color: var(--ui-text-dim); margin-left: 2px; }
+/* --- Label / value --------------------------------------------------------- */
 
-/* --- Progress bar (background-behind-text) ---------------------------- *
- * The fill is an absolutely-positioned layer behind the content. The
- * row's own --ui-progress-color / --ui-progress-pct custom properties are
- * set inline by the macro. Fill is a tint (color-mix at 35%) so the label
- * and "v/max" stay readable; a 2px saturated edge on the left marks the
- * colour at full strength. */
+.ui-value__label {
+	flex: 1 1 auto;
+	color: var(--ui-text-dim, #9a9a9a);
+	overflow-wrap: break-word;
+}
+.ui-value__value {
+	flex: 0 0 auto;
+	font-weight: bold;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.ui-value__unit {
+	margin-left: 0.25em;
+	font-weight: normal;
+	font-size: 0.85em;
+	color: var(--ui-text-dim, #9a9a9a);
+}
+
+/* --- Progress — a bordered TRACK --------------------------------------------
+ * Each bar is its own bordered rectangle with vertical margin, so stacked
+ * bars read as discrete blocks (an empty bar is a clean empty track). The
+ * fill is the author's colour at FULL strength — no opacity wash, no
+ * leading-edge hack — and the label/value text overlays it. The author
+ * therefore chooses a fill their text stays readable on. */
+
 .ui-progress {
-        position: relative;
-        overflow: hidden;
-        --ui-progress-color: var(--ui-accent);
-        --ui-progress-pct: 0%;
+	position: relative;
+	flex-wrap: nowrap;
+	align-items: center;
+	overflow: hidden;
+	padding: 0.3em 0.6em;     /* inner breathing room so text isn't on the edge */
+	margin: 0.25em 0;         /* gap between consecutive bars */
+	border: 1px solid var(--ui-border, #444);   /* the track edge */
+	--ui-progress-color: var(--ui-accent, #4c73b0);
+	--ui-progress-pct: 0%;
 }
+/* Restore the bottom edge when a bar happens to be the last child
+ * (.ui-row-line:last-child would otherwise strip it). */
+.ui-progress:last-child { border-bottom: 1px solid var(--ui-border, #444); }
+
 .ui-progress::before {
-        content: "";
-        position: absolute;
-        top: 0; left: 0; bottom: 0;
-        width: var(--ui-progress-pct);
-        background: color-mix(in srgb, var(--ui-progress-color) 35%, transparent);
-        /* Saturated leading edge — sits at the fill's right edge and
-         * slides with the width. Hidden naturally when width is 0. */
-        border-right: 2px solid var(--ui-progress-color);
-        transition: width 160ms ease-out;
-        pointer-events: none;
+	content: "";
+	position: absolute;
+	top: 0; bottom: 0; left: 0;
+	width: var(--ui-progress-pct);
+	background: var(--ui-progress-color);   /* full strength — author's colour */
+	pointer-events: none;
+	transition: width 0.15s ease-out;
 }
 .ui-progress__label {
-        position: relative;
-        z-index: 1;
-        color: var(--ui-text);
+	position: relative;
+	z-index: 1;
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--ui-text, #eee);
+	overflow-wrap: break-word;
 }
 .ui-progress__text {
-        position: relative;
-        z-index: 1;
-        font-size: 85%;
-        color: var(--ui-text-dim);
-        white-space: nowrap;
-        font-variant-numeric: tabular-nums;
+	position: relative;
+	z-index: 1;
+	flex: 0 0 auto;
+	font-size: 0.85em;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	color: var(--ui-text, #eee);
 }
 
-/* --- Read-only checkbox row --- */
-.ui-check__label { color: var(--ui-text-dim); }
+/* --- Read-only checkbox row ------------------------------------------------- */
+
+.ui-check { align-items: center; }
+.ui-check__label {
+	flex: 1 1 auto;
+	color: var(--ui-text-dim, #9a9a9a);
+	overflow-wrap: break-word;
+}
+.ui-check.is-checked .ui-check__label { color: var(--ui-text, #eee); }
 .ui-check__box {
-        flex: 0 0 auto;
-        width: calc(var(--ui-unit) * 1.625);
-        height: calc(var(--ui-unit) * 1.625);
-        border: 1px solid var(--ui-border);
-        border-radius: 2px;
-        background: #111;
-        position: relative;
+	flex: 0 0 auto;
+	width: 1.05em;
+	height: 1.05em;
+	border: 1px solid var(--ui-border, #444);
+	position: relative;
 }
-.ui-check.is-checked .ui-check__box {
-        background: var(--ui-accent);
-        border-color: var(--ui-accent);
-}
+.ui-check.is-checked .ui-check__box { border-color: var(--ui-accent, #4c73b0); }
 .ui-check.is-checked .ui-check__box::after {
-        content: "\2713";
-        position: absolute;
-        inset: 0;
-        color: #fff;
-        font-size: calc(var(--ui-unit) * 1.375);
-        line-height: calc(var(--ui-unit) * 1.625);
-        text-align: center;
+	content: "\2713";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.85em;
+	line-height: 1;
+	color: var(--ui-accent, #4c73b0);
 }
 
-/* --- Willpower pips (table row) --------------------------------------- *
- * Label cell left, pips cell right. Pips are small circles: filled =
- * accent, inactive = dim outline. Exactly max slots (default 10) so the
- * row width is stable and scannable. */
+/* --- Willpower pips -----------------------------------------------------------
+ * em-sized pips in a wrapping row: 10+ pips can never overflow the sidebar.
+ */
+
+.wp-pips { align-items: center; }
 .wp-pips__label {
-        color: var(--ui-text-dim);
-        font-size: 90%;
+	flex: 0 0 auto;
+	font-size: 0.9em;
+	color: var(--ui-text-dim, #9a9a9a);
 }
 .wp-pips__row {
-        display: flex;
-        align-items: center;
-        gap: calc(var(--ui-unit) * 0.375);
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.3em;
+	min-width: 0;
 }
 .wp-pip {
-        width: calc(var(--ui-unit) * 1);
-        height: calc(var(--ui-unit) * 1);
-        background: #111;
-        border: 1px solid var(--ui-border);
-        border-radius: 50%;
-        transition: background 120ms ease, border-color 120ms ease;
+	width: 0.7em;
+	height: 0.7em;
+	border: 1px solid var(--ui-border, #444);
+	border-radius: 50%;
+	transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 .wp-pip.is-filled {
-        background: var(--ui-accent);
-        border-color: var(--ui-accent);
+	background: var(--ui-accent, #4c73b0);
+	border-color: var(--ui-accent, #4c73b0);
 }
 
-/* --- Status badges (table rows) --------------------------------------- *
- * Each active status is a row: icon + label left, kind marker (+/−) right.
- * Buffs tint accent; debuffs tint red. */
-.status-list { display: flex; flex-direction: column; }
-.status-empty { color: var(--ui-text-dim); font-style: italic; font-size: 85%; }
+/* --- Status badges -------------------------------------------------------------- */
+
+.status-list { display: flex; flex-direction: column; min-width: 0; }
+.status-empty {
+	font-size: 0.85em;
+	font-style: italic;
+	color: var(--ui-text-dim, #9a9a9a);
+}
+.status-badge { align-items: center; }
 .status-badge__id {
-        display: inline-flex;
-        align-items: center;
-        gap: calc(var(--ui-unit) * 0.5);
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5em;
+	flex: 1 1 auto;
+	min-width: 0;
 }
-.status-badge__icon { font-style: normal; line-height: 1; }
-.status-badge__label { font-size: 90%; }
+.status-badge__icon {
+	flex: 0 0 auto;
+	width: 1.1em;
+	text-align: center;
+	font-style: normal;
+	line-height: 1;
+}
+.status-badge__label { font-size: 0.9em; overflow-wrap: break-word; }
 .status-badge__kind {
-        font-weight: bold;
-        font-size: 100%;
-        width: calc(var(--ui-unit) * 1.5);
-        text-align: center;
+	flex: 0 0 auto;
+	width: 1.2em;
+	font-weight: bold;
+	text-align: center;
 }
-.status-badge--buff  { color: var(--ui-accent); }
-.status-badge--buff .status-badge__kind  { color: var(--ui-accent); }
-.status-badge--debuff { color: #e74c3c; }
-.status-badge--debuff .status-badge__kind { color: #e74c3c; }
+.status-badge--buff,
+.status-badge--buff .status-badge__kind   { color: #6a9955; }
+.status-badge--debuff,
+.status-badge--debuff .status-badge__kind { color: #a85454; }
 
-/* --- Divider / spacer --- */
+/* --- Note line ------------------------------------------------------------------- */
+
+.ui-note {
+	padding: 0.2em 0;
+	font-size: 0.85em;
+	font-style: italic;
+	line-height: 1.45;
+	color: var(--ui-text-dim, #9a9a9a);
+	overflow-wrap: break-word;
+}
+
+/* --- List ------------------------------------------------------------------------- */
+
+.ui-list {
+	margin: 0.25em 0;
+	padding-left: 1.5em;
+	list-style: square outside;
+}
+.ui-list__item { margin: 0.15em 0; line-height: 1.4; }
+.ui-list__item::marker { color: var(--ui-text-dim, #9a9a9a); }
+
+/* --- Stat grid -----------------------------------------------------------------------
+ * Ruled cells: the grid's own background shows through the 1px gaps as
+ * gridlines in the real border colour (clear definition). minmax(5em,…)
+ * keeps two cells viable in a stock-width sidebar. */
+
+.ui-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(5em, 1fr));
+	gap: 1px;
+	margin: 0.3em 0;
+	background: var(--ui-border, #444);          /* gridline colour */
+	border: 1px solid var(--ui-border, #444);
+}
+.ui-grid > * {
+	min-width: 0;
+	padding: 0.5em 0.6em;
+	background: var(--ui-bg-raised, #161616);    /* cell face */
+}
+
+.ui-stat { text-align: center; }
+.ui-stat__value {
+	font-size: 1.15em;
+	font-weight: bold;
+	line-height: 1.2;
+	font-variant-numeric: tabular-nums;
+}
+.ui-stat__label {
+	margin-top: 0.1em;
+	font-size: 0.7em;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-dim, #9a9a9a);
+}
+
+/* A uiValue dropped into a grid collapses into a centred, grouped cell:
+ * bold value on top, small-caps label beneath — no edge-to-edge spread. */
+.ui-grid > .ui-value {
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	gap: 0.1em;
+	padding: 0.5em 0.6em;
+	border-bottom: 0;
+}
+.ui-grid > .ui-value .ui-value__value { order: 1; flex: none; }
+.ui-grid > .ui-value .ui-value__label {
+	order: 2;
+	flex: none;
+	font-size: 0.7em;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+/* --- Inline tag ------------------------------------------------------------------------- */
+
+.ui-tag {
+	display: inline-block;
+	padding: 0 0.45em;
+	border: 1px solid var(--ui-border, #444);
+	font-size: 0.8em;
+	line-height: 1.7;
+	white-space: nowrap;
+	color: var(--ui-text-dim, #9a9a9a);
+}
+.ui-tag--accent { border-color: var(--ui-accent, #4c73b0); color: var(--ui-accent, #4c73b0); }
+.ui-tag--buff   { border-color: #6a9955; color: #6a9955; }
+.ui-tag--debuff { border-color: #a85454; color: #a85454; }
+
+/* --- Divider / spacer ---------------------------------------------------------------------- */
+
 .ui-divider {
-        display: flex;
-        align-items: center;
-        gap: calc(var(--ui-unit) * 1);
-        color: var(--ui-text-dim);
-        font-size: 85%;
+	display: flex;
+	align-items: center;
+	gap: 0.6em;
+	margin: 0.35em 0;
+	font-size: 0.75em;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-dim, #9a9a9a);
 }
 .ui-divider::before,
 .ui-divider::after {
-        content: "";
-        flex: 1;
-        border-top: 1px solid var(--ui-border);
+	content: "";
+	flex: 1;
+	border-top: 1px solid var(--ui-border-faint, #2c2c2c);
 }
-.ui-divider:empty::before { display: none; }
+.ui-divider:empty::after { display: none; }
 
-.ui-spacer { flex: 1 1 auto; }
+.ui-spacer { flex: 1 1 auto; min-height: 0.5em; }
