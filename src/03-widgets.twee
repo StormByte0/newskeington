@@ -65,43 +65,48 @@
         function V() { return State.variables; }
 
         /* =====================================================================
-         *  Containers
+         *  Containers — uiContainer / uiCard / uiRow share one factory.
+         *  config: { tag, cls, body?, bodyCls?, idArg?, titleArg?,
+         *            titleTag?, titleCls? }
          * ===================================================================== */
+        function makeContainer(config) {
+                return {
+                        tags: [],
+                        handler: function () {
+                                var el = h(config.tag, { "class": config.cls });
+                                var target = el;
 
-        Macro.add("uiContainer", {
-                tags: [],
-                handler: function () {
-                        var id    = txt(this.args[0]);
-                        var title = txt(this.args[1]);
-                        var el = h("section", { "class": "ui-container" });
-                        if (id)    el.setAttribute("data-container", id);
-                        if (title) el.appendChild(h("h3", { "class": "ui-container__title" }, title));
-                        this.output.appendChild(el);
-                        wikifyContents(el, this.payload[0].contents);
-                }
-        });
+                                if (config.idArg != null) {
+                                        var id = txt(this.args[config.idArg]);
+                                        if (id) el.setAttribute("data-container", id);
+                                }
+                                if (config.titleArg != null) {
+                                        var title = txt(this.args[config.titleArg]);
+                                        if (title && config.titleTag) {
+                                                el.appendChild(h(config.titleTag, { "class": config.titleCls }, title));
+                                        }
+                                }
+                                if (config.body) {
+                                        target = h("div", { "class": config.bodyCls });
+                                        el.appendChild(target);
+                                }
+                                this.output.appendChild(el);
+                                wikifyContents(target, this.payload[0].contents);
+                        }
+                };
+        }
 
-        Macro.add("uiCard", {
-                tags: [],
-                handler: function () {
-                        var title = txt(this.args[0]);
-                        var el = h("div", { "class": "ui-card" });
-                        if (title) el.appendChild(h("header", { "class": "ui-card__title" }, title));
-                        var body = h("div", { "class": "ui-card__body" });
-                        el.appendChild(body);
-                        this.output.appendChild(el);
-                        wikifyContents(body, this.payload[0].contents);
-                }
-        });
-
-        Macro.add("uiRow", {
-                tags: [],
-                handler: function () {
-                        var el = h("div", { "class": "ui-row" });
-                        this.output.appendChild(el);
-                        wikifyContents(el, this.payload[0].contents);
-                }
-        });
+        Macro.add("uiContainer", makeContainer({
+                tag: "section", cls: "ui-container",
+                idArg: 0, titleArg: 1, titleTag: "h3", titleCls: "ui-container__title"
+        }));
+        Macro.add("uiCard", makeContainer({
+                tag: "div", cls: "ui-card", body: true, bodyCls: "ui-card__body",
+                titleArg: 0, titleTag: "header", titleCls: "ui-card__title"
+        }));
+        Macro.add("uiRow", makeContainer({
+                tag: "div", cls: "ui-row"
+        }));
 
         /* =====================================================================
          *  Leaf widgets
@@ -181,6 +186,14 @@
                 }
         });
 
+        /*  uiDividerV — vertical divider for separating adjacent items inside
+         *  a <<uiRow>> (e.g. Money | Debt) so they don't visually merge. */
+        Macro.add("uiDividerV", {
+                handler: function () {
+                        this.output.appendChild(h("div", { "class": "ui-divider-v", role: "separator", "aria-hidden": "true" }));
+                }
+        });
+
         Macro.add("uiSpacer", {
                 handler: function () {
                         this.output.appendChild(h("div", { "class": "ui-spacer" }));
@@ -196,13 +209,12 @@
         });
 
         /* =====================================================================
-         *  Willpower pips — table-row layout.
+         *  Willpower pips — table-row layout (2 rows × 5 columns of pips).
          *
-         *  Left cell: "Willpower" label. Right cell: exactly 10 circular pips,
-         *  `val` filled (accent), the rest inactive (dim outline). No count
-         *  text — the active pips ARE the count. Reads $resources.willpower +
-         *  $resources.maxWillpower (default 10, but always renders 10 slots
-         *  for a stable, scannable row).
+         *  Left cell: "Willpower" label. Right cell: a 5-wide grid of pips
+         *  (default 10 total → 2 rows of 5). `val` filled (accent), the rest
+         *  inactive (dim outline). No count text — the pips ARE the count.
+         *  Reads $resources.willpower + $resources.maxWillpower.
          * ===================================================================== */
         Macro.add("willpowerPips", {
                 handler: function () {
@@ -214,14 +226,14 @@
 
                         var el = h("div", { "class": "ui-row-line wp-pips" });
                         el.appendChild(h("span", { "class": "wp-pips__label", text: "Willpower" }));
-                        var pips = h("span", { "class": "wp-pips__row" });
+                        var grid = h("span", { "class": "wp-pips__grid" });
                         for (var i = 0; i < max; i++) {
-                                pips.appendChild(h("span", {
+                                grid.appendChild(h("span", {
                                         "class": "wp-pip" + (i < val ? " is-filled" : ""),
                                         "aria-hidden": "true"
                                 }));
                         }
-                        el.appendChild(pips);
+                        el.appendChild(grid);
                         this.output.appendChild(el);
                 }
         });
@@ -241,10 +253,16 @@
          *  From passages: <<statusAdd "drunk">> / <<statusRemove "drunk">>
          *  Check: <<if setup.status.has("drunk")>> ... <</if>>
          * ===================================================================== */
-        function ensureStatusState() {
-                var v = V();
-                if (!Array.isArray(v.status)) v.status = [];
-                return v;
+        /* Returns the active status array, ensuring it exists on $vars when
+         * `write` is true. Read-only callers pass false to avoid mutation. */
+        var STATUS_EMPTY = [];
+        function statusArr(write) {
+                var v = State.variables;
+                if (!Array.isArray(v.status)) {
+                        if (!write) return STATUS_EMPTY;
+                        v.status = [];
+                }
+                return v.status;
         }
         var statusPending = false;
         function statusRefresh() {
@@ -261,32 +279,28 @@
                         var base = { id: id, label: id, icon: "", kind: "debuff", description: "" };
                         this.catalog[id] = Object.assign(base, def || {});
                 },
-                get:  function (id) { return this.catalog[id] || null; },
-                all:  function ()   { return Object.keys(this.catalog); },
+                get: function (id) { return this.catalog[id] || null; },
+                all: function ()   { return Object.keys(this.catalog); },
 
                 add: function (id) {
                         if (!this.get(id)) { console.warn("[status] unknown id:", id); return this; }
-                        ensureStatusState();
-                        var v = V();
-                        if (v.status.indexOf(id) < 0) v.status.push(id);
+                        var arr = statusArr(true);
+                        if (arr.indexOf(id) < 0) arr.push(id);
                         statusRefresh();
                         return this;
                 },
                 remove: function (id) {
-                        ensureStatusState();
-                        var v = V();
-                        var idx = v.status.indexOf(id);
-                        if (idx >= 0) v.status.splice(idx, 1);
+                        var arr = statusArr(true);
+                        var idx = arr.indexOf(id);
+                        if (idx >= 0) arr.splice(idx, 1);
                         statusRefresh();
                         return this;
                 },
                 has: function (id) {
-                        var v = V();
-                        return Array.isArray(v.status) && v.status.indexOf(id) >= 0;
+                        return statusArr(false).indexOf(id) >= 0;
                 },
                 active: function () {
-                        var v = V();
-                        return Array.isArray(v.status) ? v.status.slice() : [];
+                        return statusArr(false).slice();
                 }
         };
 
@@ -598,7 +612,9 @@
 }
 
 /* --- Willpower pips -----------------------------------------------------------
- * em-sized pips in a wrapping row: 10+ pips can never overflow the sidebar.
+ * Pips pack into a 5-column grid (2 rows × 5 cols for the default cap of 10),
+ * so they read as a compact block instead of a long single row. The grid
+ * sits to the right of the label.
  */
 
 .wp-pips { align-items: center; }
@@ -607,11 +623,12 @@
 	font-size: 0.9em;
 	color: var(--ui-text-dim, #9a9a9a);
 }
-.wp-pips__row {
-	display: flex;
-	flex-wrap: wrap;
+.wp-pips__grid {
+	display: grid;
+	grid-template-columns: repeat(5, auto);
 	justify-content: flex-end;
 	gap: 0.3em;
+	flex: 1 1 auto;
 	min-width: 0;
 }
 .wp-pip {
@@ -769,5 +786,16 @@
 	border-top: 1px solid var(--ui-border-faint, #2c2c2c);
 }
 .ui-divider:empty::after { display: none; }
+
+/* Vertical divider — a thin upright rule for separating adjacent items
+ * inside a <<uiRow>> (e.g. Money | Debt). It self-centres vertically and
+ * takes no flex width so the row's space-between layout is preserved. */
+.ui-divider-v {
+	flex: 0 0 auto;
+	width: 0;
+	align-self: stretch;
+	margin: 0.15em 0.25em;
+	border-left: 1px solid var(--ui-border-faint, #2c2c2c);
+}
 
 .ui-spacer { flex: 1 1 auto; min-height: 0.5em; }
