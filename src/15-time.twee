@@ -1,0 +1,998 @@
+:: TimeScript [script]
+/* =========================================================================
+ * Module: time — modular in-game date & time tracking.
+ *
+ * ════════════════════════════════════════════════════════════════════════
+ *  TABLE OF CONTENTS
+ * ════════════════════════════════════════════════════════════════════════
+ *  1.  State shape ($time)
+ *  2.  Three day concepts (date / day / days)
+ *  3.  Element bounds (config.elements)
+ *  4.  Carry-over chain (how overflow cascades)
+ *  5.  setup.time API — mutators
+ *  6.  setup.time API — readers
+ *  7.  UI macros — leaf display (ui* prefix)
+ *  8.  UI macros — composite card (<<uiTime>>)
+ *  9.  Mutator macros (time* prefix)
+ *  10. Config reference (setup.time.configure)
+ *  11. Auto-advance on passage transition
+ *  12. Save/rewind semantics
+ *  13. Complete worked examples
+ *  14. Gotchas & common mistakes
+ * ════════════════════════════════════════════════════════════════════════
+ *
+ * ── 1. STATE SHAPE ──────────────────────────────────────────────────────
+ *   $time is a plain object in State.variables (SugarCube's $vars), set
+ *   in StoryInit. Seven primitive number fields — NO functions, NO class
+ *   instances, NO circular refs. This makes it 100% save/serialize-safe.
+ *
+ *     <<set $time = {
+ *         minute: 0,    // 0-59
+ *         hour:   8,    // 0-23
+ *         date:   1,    // 1-31  (day of month)
+ *         day:    0,    // 0-6   (weekday index; Sun=0..Sat=6)
+ *         days:   0,    // 0+    (total elapsed days, monotonic counter)
+ *         month:  1,    // 1-12
+ *         year:   1     // 1+    (no upper bound)
+ *     }>>
+ *
+ *   ⚠ DO NOT use leading zeros in the literals! `08` is an invalid octal
+ *     in JS strict mode and the <<set>> will silently fail. Use `8`.
+ *     Display padding (e.g. "08") is a render concern — see padDate etc.
+ *
+ * ── 2. THREE DAY CONCEPTS ───────────────────────────────────────────────
+ *   The module tracks three distinct "day" notions. Don't conflate them:
+ *
+ *     date  (1-31)  Calendar day of the month. Cycles within the month
+ *                   and cascades into month on overflow (Jan 31 + 1 day
+ *                   → Feb 1). Used for "what day of the month is it?".
+ *
+ *     day   (0-6)   Weekday index. Sun=0, Mon=1, ..., Sat=6. Advances
+ *                   automatically whenever the calendar rolls forward
+ *                   by a day (via advance("date") or hour overflow).
+ *                   Displayed as a name ("Mon") via <<uiDay>> when
+ *                   dayNames is configured (default: English short
+ *                   names). Used for "what day of the week is it?".
+ *
+ *     days  (0+)    Monotonic counter of total elapsed days since the
+ *                   game started. Never cycles, never cascades up —
+ *                   just counts up forever. Auto-increments whenever
+ *                   the calendar advances by a day. NOT directly
+ *                   advanceable (it's a sink). Used for "Day 3 of your
+ *                   journey" displays and elapsed-time event triggers.
+ *                   Set manually via <<timeSet {days:N}>> if you need
+ *                   to reset it (rare).
+ *
+ * ── 3. ELEMENT BOUNDS (config.elements) ─────────────────────────────────
+ *   Every element's min/max is declared in one place. `clamp: true`
+ *   means direct advances of that element clamp dependent fields
+ *   (date) instead of cascading. All bounds are data-driven — you can
+ *   customize the calendar (e.g. 10-hour days, 5-day weeks, 8-month
+ *   years) via configure({elements:{...}}).
+ *
+ *     minute { min:0, max:59 }                 hour   { min:0, max:23 }
+ *     date   { min:1, max:31 }                 day    { min:0, max:6  }
+ *     days   { min:0, max:Infinity }           month  { min:1, max:12, clamp:true }
+ *     year   { min:1, max:Infinity, clamp:true }
+ *
+ * ── 4. CARRY-OVER CHAIN ─────────────────────────────────────────────────
+ *   When you advance a smaller unit, overflow cascades upward through
+ *   the chain — like elementary-school addition. Example:
+ *     55 min + 20 min = 75 min → normalize → hour += 1, minute = 15.
+ *
+ *     minute overflow → hour  += 1
+ *     hour   overflow → date  += 1   AND  day = (day + n) % 7   AND  days += n
+ *     date   overflow → month += 1
+ *     month  overflow → year  += 1
+ *
+ *   `days` is a SINK — it counts up but never feeds into anything.
+ *
+ *   SPECIAL CASES (intentional, not bugs):
+ *     • advance("month", N) CLAMPS date instead of cascading. Jan 31 +
+ *       1 month → Feb 28 (not Mar 3). Rationale: adding calendar months
+ *       is not the same as adding 30 days.
+ *     • advance("month") and advance("year") do NOT touch day-of-week
+ *       or `days`. Months have variable day counts, so there's no
+ *       correct way to advance the weekday. Use advance("date", N) if
+ *       you need those to track.
+ *     • advance("day", N) is an ALIAS for advance("date", N). The
+ *       calendar moves forward by N days, weekday advances, AND
+ *       `days` += N. (day-of-week is not independently advanceable —
+ *       it's a label that tracks calendar days.)
+ *     • advance("days", N) is a NO-OP with a console warning. The
+ *       counter auto-tracks; force-set it via set({days:N}) if needed.
+ *     • set({...}) does NOT touch `days`. `set` is a teleport ("make
+ *       it March 15"), not an advance ("add 3 days"). The counter
+ *       only changes when time actually flows forward via advance().
+ *     • Negative amounts work — going back in time rolls the day,
+ *       date, month, year down AND decrements `days`.
+ *
+ *   EXAMPLE: 23:50 Sat 31/Dec/2024 + 20 min
+ *     → minute 50 → 70 → 10 (carry 1 to hour)
+ *     → hour 23 → 24 → 0 (carry 1 to date + day + days)
+ *     → date 31 → 32 → 1 (Feb has 31 days? no — Dec has 31, so 31+1=32
+ *       → overflow → month 12 → 13 → 1 (carry 1 to year))
+ *     → day 6 (Sat) → 0 (Sun)
+ *     → days 0 → 1
+ *     → month 12 → 1 (carry 1 to year)
+ *     → year 2024 → 2025
+ *     RESULT: 00:10 Sun 01/Jan/2025, days=1
+ *
+ * ── 5. setup.time API — MUTATORS ────────────────────────────────────────
+ *   All mutators read from $time, mutate, normalize, and write back to
+ *   $time. They do NOT cache anything in JS — $time is the single
+ *   source of truth.
+ *
+ *     setup.time.advance(element, amount)
+ *         element: "minute" | "hour" | "date" | "day" | "month" | "year"
+ *         amount:  integer (negative = go backward)
+ *         "day" is an alias for "date".
+ *         "days" is NOT accepted — it auto-tracks. Use set({days:N}).
+ *         Cascades or clamps per the rules above.
+ *
+ *     setup.time.advanceToHour(hour, minute=0)
+ *         Jump FORWARD to the next occurrence of HH:MM. If the target
+ *         time has already passed today, jumps to tomorrow's HH:MM.
+ *
+ *     setup.time.set({minute?, hour?, date?, day?, days?, month?, year?})
+ *         Partial set — only the fields you provide are changed. Then
+ *         normalize() runs to cascade any overflow. Does NOT touch
+ *         `days` (it's a teleport, not an advance).
+ *
+ *     setup.time.configure({config_key: value, ...})
+ *         Override any config field. See section 10 for the full list.
+ *
+ * ── 6. setup.time API — READERS ─────────────────────────────────────────
+ *   All readers are pure — they do NOT mutate $time.
+ *
+ *     setup.time.get()
+ *         Returns { minute, hour, date, day, days, month, year,
+ *                   phase, phaseLabel, isDaytime, dayName, monthName,
+ *                   display, dateString, timeString }
+ *
+ *     setup.time.format()
+ *         → "08:00" (24h) or "8:00 AM" (12h), per config.format
+ *
+ *     setup.time.formatDate()
+ *         → date-line string built from date-like elements in
+ *           displayElements (day/date/month/year), joined by separator
+ *
+ *     setup.time.formatTime()
+ *         → time-line string built from time-like elements in
+ *           displayElements (phase/hour/minute), joined by separator
+ *
+ *     setup.time.phase()      → "Morning" / "Night" / etc.
+ *     setup.time.isDaytime()  → true between 06:00 and 20:00
+ *     setup.time.dayName()    → "Mon" (or whatever dayNames[day] is)
+ *     setup.time.monthName()  → "Jan" (or whatever monthNames[month-1] is)
+ *
+ * ── 7. UI MACROS — LEAF DISPLAY (ui* prefix) ────────────────────────────
+ *   Per the widgets.twee convention, all display macros use the `ui`
+ *   prefix. Each renders ONE element's value as text — compose freely:
+ *
+ *     <<uiMinute>>       → "05"          (always 2-digit padded)
+ *     <<uiHour>>         → "08" or "8"   (per config.format)
+ *     <<uiHour "12h">>   → "8"           (per-call override)
+ *     <<uiHour "24h">>   → "08"          (per-call override)
+ *     <<uiAmpm>>         → "AM" or "PM"  (use with <<uiHour "12h">>)
+ *     <<uiDate>>         → "1" or "01"   (per config.padDate)
+ *     <<uiDay>>          → "Mon"         (per config.dayNames; default
+ *                                         English short names. Pass
+ *                                         dayNames:null to render the
+ *                                         raw index "1" instead.)
+ *     <<uiDays>>         → "3"           (total elapsed days counter)
+ *     <<uiMonth>>        → "Jan" or "1"  (per config.monthNames /
+ *                                         config.padMonth)
+ *     <<uiYear>>         → "2024"        (per config.padYear)
+ *     <<uiPhase>>        → "Morning"     (per config.phases)
+ *
+ *   COMPOSITION EXAMPLES:
+ *     <<uiDate>>/<<uiMonth>>/<<uiYear>>
+ *         → "1/1/1"  (or "01/01/2024" with padding)
+ *
+ *     <<uiHour>>:<<uiMinute>>
+ *         → "08:00"  (24h) or "8:00" (12h)
+ *
+ *     <<uiHour "12h">>:<<uiMinute>> <<uiAmpm>>
+ *         → "8:00 AM"  (forces 12h regardless of global config)
+ *
+ *     <<uiDay>>, <<uiDate>> <<uiMonth>> <<uiYear>>
+ *         → "Mon, 1 Jan 2024"
+ *
+ *     Day <<uiDays>> — <<uiDay>> <<uiDate>>/<<uiMonth>>/<<uiYear>>
+ *         → "Day 3 — Mon 15/1/1"
+ *
+ *     It is <<uiPhase>>. The time is <<uiHour>>:<<uiMinute>>.
+ *         → "It is Morning. The time is 08:00."
+ *
+ * ── 8. UI MACROS — COMPOSITE CARD (<<uiTime>>) ──────────────────────────
+ *   Pre-built two-line block. The top line (date-line) is built from
+ *   the date-like elements in config.displayElements; the bottom line
+ *   (time-line) from the time-like elements. If either set is empty,
+ *   only the other line renders.
+ *
+ *     <<uiTime>>
+ *
+ *   The card has a phase-tinted left accent border (data-phase attribute
+ *   drives the color via CSS). Default displayElements:
+ *     ["day","date","month","year","phase","hour","minute"]
+ *   → renders "Mon · 1 · Jan · 2024" / "Morning · 08 · 00"
+ *
+ *   To customize, override displayElements:
+ *     setup.time.configure({
+ *         displayElements: ["days","day","date","month","year",
+ *                           "phase","hour","minute"]
+ *     })
+ *   → adds `days` to the date-line: "3 · Mon · 1 · Jan · 2024"
+ *
+ *   Date-like elements: days, day, date, month, year
+ *   Time-like elements: phase, hour, minute
+ *   (ampm is NOT in either list — use <<uiAmpm>> in custom compositions)
+ *
+ * ── 9. MUTATOR MACROS (time* prefix) ────────────────────────────────────
+ *   Per the author macro convention (itemAdd, equip, statMod...), all
+ *   mutators use the `time` prefix. Each auto-refreshes the UI after
+ *   mutating.
+ *
+ *     <<timeAdvance "minute" 60>>       advance 60 minutes
+ *     <<timeAdvance "hour" 2>>          advance 2 hours
+ *     <<timeAdvance "date" 1>>          advance 1 day (date+day+days track)
+ *     <<timeAdvance "day" 1>>           alias for <<timeAdvance "date" 1>>
+ *     <<timeAdvance "month" 1>>         advance 1 month (clamps date,
+ *                                       doesn't touch day/days)
+ *     <<timeAdvance "year" 1>>          advance 1 year (clamps Feb 29 → 28)
+ *     <<timeAdvanceTo 20>>              advance to next 20:00
+ *     <<timeAdvanceTo 20 30>>           advance to next 20:30
+ *     <<timeSet {year:2, month:3, date:15}>>   partial set + normalize
+ *     <<timeSet {days:5}>>              manually set elapsed-days counter
+ *
+ *   NOTE: There is no <<timeAdvance "days" N>> — `days` auto-tracks.
+ *     If you need to reset it, use <<timeSet {days:N}>>.
+ *
+ * ── 10. CONFIG REFERENCE ────────────────────────────────────────────────
+ *   Override any field via setup.time.configure({key: value, ...}).
+ *   All fields are optional — only override what you want to change.
+ *
+ *     format: "24h" | "12h"              (default: "24h")
+ *         Global default for <<uiHour>>. Override per-call with
+ *         <<uiHour "12h">> or <<uiHour "24h">>.
+ *
+ *     padDate: true | false              (default: false)
+ *         Pad <<uiDate>> to 2 digits ("01" instead of "1").
+ *
+ *     padMonth: true | false             (default: false)
+ *         Pad numeric <<uiMonth>> to 2 digits. Ignored if monthNames
+ *         is set (names aren't padded).
+ *
+ *     padYear: 0 | 2 | 4                 (default: 0 = no padding)
+ *         Pad <<uiYear>> to N digits ("24" with padYear:2).
+ *
+ *     dayNames: [7 strings] | null       (default: ["Sun".."Sat"])
+ *         Weekday names indexed by `day` (0-6). Sun=0 by convention.
+ *         Pass null to render the raw index instead of a name.
+ *         Pass a 7-element array for custom names:
+ *           ["Moonsday","Ironday","Watersday","Woodday",
+ *            "Firesday","Starday","Sonsday"]
+ *
+ *     monthNames: [12 strings] | null    (default: ["Jan".."Dec"])
+ *         Month names indexed by `month`-1 (1-12 → 0-11).
+ *         Pass null to render numeric month.
+ *         Pass a 12-element array for custom names:
+ *           ["Dawn","Melt","Bloom","Sun","High","Reap",
+ *            "Fall","Mist","Frost","Dark","Deep","Seed"]
+ *
+ *     monthLengths: [12 numbers]         (default: [31,28,31,30,...])
+ *         Days per month for non-leap years. February is overridden
+ *         by isLeapYear + leapFebDays in leap years.
+ *
+ *     isLeapYear: function(year) -> bool | null   (default: null)
+ *         Custom leap-year rule. When null, no leap-year adjustment
+ *         is made (February is always monthLengths[1] = 28).
+ *         Example: function(y) { return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0); }
+ *
+ *     leapFebDays: 29 | 28               (default: 29)
+ *         February length in leap years (only used when isLeapYear
+ *         returns true for a given year).
+ *
+ *     phases: [{label, from, to}, ...]   (default: 7 phases covering 0-24)
+ *         Time-of-day phase definitions. `from`/`to` are hours (0-24).
+ *         Phases must cover 0..24 without gaps. Default:
+ *           Night [0,5), Dawn [5,8), Morning [8,12), Noon [12,14),
+ *           Afternoon [14,17), Evening [17,20), Night [20,24)
+ *         Used by <<uiPhase>>, setup.time.phase(), and the card's
+ *         accent border color (data-phase="lowercase-label").
+ *
+ *     displayElements: [element names]   (default: see code)
+ *         Controls what <<uiTime>> renders. Date-like elements
+ *         (days/day/date/month/year) go on the top line; time-like
+ *         (phase/hour/minute) go on the bottom line. Order within
+ *         each line follows the array order.
+ *
+ *     separator: " · "                   (default: " · " with U+00B7)
+ *         String joiner between elements in formatDate/formatTime
+ *         and in the <<uiTime>> card lines.
+ *
+ *     autoAdvanceMinutes: 0 | N          (default: 0 = off)
+ *         When >0, advances the clock by N minutes on every passage
+ *         transition (after Start). Implemented on :passagestart so
+ *         the rendered passage sees the new time. The initial Start
+ *         passage never costs time.
+ *
+ *     elements: { element: {min, max, clamp?} }
+ *         (default: see section 3 above)
+ *         Master element registry. Override to customize the calendar
+ *         (e.g. 10-hour days, 5-day weeks, 8-month years). The
+ *         normalizer reads bounds from here — fully data-driven.
+ *
+ *     startDays: 0 | N                   (default: 0)
+ *         Initial value of the `days` counter. Rarely needed —
+ *         usually you want it to start at 0 and count up.
+ *
+ * ── 11. AUTO-ADVANCE ON PASSAGE TRANSITION ──────────────────────────────
+ *   When config.autoAdvanceMinutes > 0, the clock advances by that many
+ *   minutes every time the player navigates to a new passage (after the
+ *   initial Start). Implemented via $(document).on(":passagestart", ...)
+ *   so the rendered passage sees the new time.
+ *
+ *   Guard: State.length < 2 → skip. The very first passage (Start) never
+ *   costs time, so the player's first action is from the initial time.
+ *
+ *   To enable:
+ *     setup.time.configure({ autoAdvanceMinutes: 30 })
+ *   → every passage transition costs 30 minutes of game time.
+ *
+ *   To disable again:
+ *     setup.time.configure({ autoAdvanceMinutes: 0 })
+ *
+ * ── 12. SAVE/REWIND SEMANTICS ───────────────────────────────────────────
+ *   $time is a normal SugarCube $var. SugarCube snapshots $vars at
+ *   every passage entry, so:
+ *
+ *     • Going Back  → $time reverts to the previous passage's snapshot.
+ *     • Going Forward → $time restores to the forward passage's snapshot.
+ *     • Save/Load → $time is included in the save, restored on load.
+ *     • Restart  → StoryInit re-runs, $time resets to its initial value.
+ *
+ *   The JS layer (setup.time) is STATELESS — it reads from and writes
+ *   to $time, never caches. So there's nothing to sync on load; the
+ *   state IS the variable.
+ *
+ *   config (format, dayNames, etc.) is LOGIC, not player state — it
+ *   lives in JS and is NOT saved. Set it once in a [script] passage
+ *   and it persists for the session. SugarCube strips functions from
+ *   $vars during save serialization anyway, so config can't live in
+ *   $vars (isLeapYear is a function).
+ *
+ * ── 13. COMPLETE WORKED EXAMPLES ────────────────────────────────────────
+ *
+ *   A) Basic usage — defaults work out of the box:
+ *
+ *     StoryInit:
+ *       <<set $time = { minute:0, hour:8, date:1, day:0, days:0, month:1, year:1 }>>
+ *
+ *     PanelLeft:
+ *       <<uiTime>>
+ *       → renders "Sun · 1 · Jan · 1 / Morning · 08 · 00"
+ *
+ *     Passage:
+ *       <<timeAdvance "hour" 3>>
+ *       → clock becomes 11:00, card updates
+ *
+ *   B) Custom calendar with named days/months:
+ *
+ *     In a [script] passage (runs once at startup):
+ *       setup.time.configure({
+ *           dayNames:   ["Moonsday","Ironday","Watersday","Woodday",
+ *                        "Firesday","Starday","Sonsday"],
+ *           monthNames: ["Dawn","Melt","Bloom","Sun","High","Reap",
+ *                        "Fall","Mist","Frost","Dark","Deep","Seed"],
+ *           isLeapYear: function(y) { return y % 4 === 0; },
+ *           format:     "12h",
+ *           padDate:    true,
+ *           padMonth:   true,
+ *           padYear:    4
+ *       })
+ *
+ *     Now <<uiTime>> renders:
+ *       "Moonsday · 01 · Dawn · 0001 / Morning · 8 · 00"
+ *
+ *   C) Custom date display in a passage:
+ *
+ *     "You wake on <<uiDay>>, the <<uiDate>> of <<uiMonth>>,
+ *      in the year <<uiYear>>. It is <<uiPhase>> — the clock reads
+ *      <<uiHour "12h">>:<<uiMinute>> <<uiAmpm>>."
+ *     → "You wake on Wed, the 7 of May, in the year 2020. It is
+ *        Morning — the clock reads 8:00 AM."
+ *
+ *   D) Elapsed-days display:
+ *
+ *     "Day <<uiDays>> of your journey — <<uiDay>> <<uiDate>>/<<uiMonth>>/<<uiYear>>"
+ *     → "Day 3 of your journey — Mon 15/1/1"
+ *
+ *   E) Conditional on time of day:
+ *
+ *     <<if setup.time.phase() == "Night">>
+ *       The streets are empty and dangerous.
+ *     <<elseif setup.time.isDaytime()>>
+ *       The market is bustling.
+ *     <</if>>
+ *
+ *     <<if $time.days >= 7>>
+ *       A week has passed — your landlord wants rent.
+ *     <</if>>
+ *
+ *   F) Auto-advance 30 min per passage transition:
+ *
+ *     setup.time.configure({ autoAdvanceMinutes: 30 })
+ *     → Start 08:00 → LookAround 08:30 → FoundTown 09:00
+ *     → Going Back reverts to 08:30 then 08:00 (save-safe).
+ *
+ *   G) Scripted time jump:
+ *
+ *     <<timeAdvanceTo 20>>         → next 20:00 (evening)
+ *     <<timeAdvanceTo 8 30>>       → next 08:30 (tomorrow morning if past)
+ *     <<timeSet {year:2, month:6, date:15}>>
+ *     <<timeSet {days:100}>>       → manually set elapsed-days counter
+ *
+ * ── 14. GOTCHAS & COMMON MISTAKES ───────────────────────────────────────
+ *
+ *   ⚠ DO NOT use leading zeros in StoryInit <<set>>:
+ *     BAD:  <<set $time = { hour:08, month:05 }>>
+ *     GOOD: <<set $time = { hour:8,  month:5  }>>
+ *     Reason: `08` is an invalid octal literal in JS strict mode
+ *     (which SugarCube uses). The <<set>> silently fails and $time
+ *     is never assigned — the UI will show fallback defaults.
+ *     Display padding ("08") is a render concern — use padDate etc.
+ *
+ *   ⚠ `day` (weekday index) is 0-based, not 1-based:
+ *     Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6
+ *     If you <<set $time.day = 1>> you get Monday, not "day 1".
+ *
+ *   ⚠ `month` is 1-based, not 0-based:
+ *     Jan=1, Feb=2, ..., Dec=12
+ *     (This matches human convention; day-of-week doesn't.)
+ *
+ *   ⚠ `dayNames` array must have exactly 7 elements (or be null):
+ *     dayNames[0] = Sunday, dayNames[6] = Saturday.
+ *     The array is indexed by the `day` field (0-6).
+ *
+ *   ⚠ `monthNames` array must have exactly 12 elements (or be null):
+ *     monthNames[0] = January, monthNames[11] = December.
+ *     The array is indexed by `month - 1` (so month=1 → index 0).
+ *
+ *   ⚠ advance("month") and advance("year") do NOT touch day-of-week
+ *     or `days`. If you want those to track, use advance("date", N)
+ *     instead. Rationale: months have variable day counts.
+ *
+ *   ⚠ advance("days", N) is a NO-OP. The `days` counter auto-tracks.
+ *     To force-set it: <<timeSet {days:N}>>.
+ *
+ *   ⚠ set({...}) does NOT touch `days`. `set` is a teleport, not an
+ *     advance. The counter only changes when time flows forward.
+ *
+ *   ⚠ `config` is NOT saved — it's logic, not player state. Set it
+ *     once in a [script] passage. If you change config mid-game, the
+ *     change applies immediately to all future renders, but old saves
+ *     don't remember what config was active when they were made.
+ *
+ *   ⚠ Don't put functions in $time. SugarCube strips them during
+ *     save serialization. $time must be a plain object of numbers.
+ *     Functions (isLeapYear, custom phase logic) belong in config.
+ *
+ *   ⚠ The :passagestart auto-advance fires BEFORE passage content is
+ *     wikified, so the rendered passage sees the new time. But it
+ *     does NOT fire on the initial Start (State.length < 2 guard).
+ *
+ *   ⚠ If you remove an element from config.displayElements, it won't
+ *     appear in <<uiTime>>. But the leaf macros (<<uiDay>> etc.) still
+ *     work — they read $time directly, not displayElements.
+ * ========================================================================= */
+(function () {
+        "use strict";
+
+        if (!setup.ui || typeof setup.ui.h !== "function") {
+                console.warn("[time] setup.ui not ready — deferring");
+                return;
+        }
+
+        var h = setup.ui.h;
+
+        var DEFAULT_PHASES = [
+                { label: "Night",     from: 0,  till: 5  },
+                { label: "Dawn",      from: 5,  till: 8  },
+                { label: "Morning",   from: 8,  till: 12 },
+                { label: "Noon",      from: 12, till: 14 },
+                { label: "Afternoon", from: 14, till: 17 },
+                { label: "Evening",   from: 17, till: 20 },
+                { label: "Night",     from: 20, till: 24 }
+        ];
+
+        var DEFAULT_MONTH_LENGTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+        var DATE_ELEMENTS = ["days", "day", "date", "month", "year"];
+        var TIME_ELEMENTS = ["phase", "hour", "minute"];
+
+        var config = {
+                format:             "24h",
+                padDate:            false,
+                padMonth:           false,
+                padYear:            0,
+                dayNames:           ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+                monthNames:         ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+                monthLengths:       DEFAULT_MONTH_LENGTHS.slice(),
+                isLeapYear:         null,
+                leapFebDays:        29,
+                phases:             DEFAULT_PHASES,
+                displayElements:    ["day", "date", "month", "year", "phase", "hour", "minute"],
+                separator:          " \u00B7 ",
+                autoAdvanceMinutes: 0,
+                /* Master element registry — lists every element AND its bounds.
+                 * `clamp: true` = direct advances clamp dependent fields
+                 * (date) instead of cascading. Used by normalize() and
+                 * advance() for fully data-driven carry-over. */
+                elements: {
+                        minute: { min: 0, max: 59 },
+                        hour:   { min: 0, max: 23 },
+                        date:   { min: 1, max: 31 },
+                        day:    { min: 0, max: 6  },
+                        days:   { min: 0, max: Infinity },
+                        month:  { min: 1, max: 12, clamp: true },
+                        year:   { min: 1, max: Infinity, clamp: true }
+                },
+                startDays: 0
+        };
+
+        function V() { return State.variables; }
+
+        function pad2(n) { return (n < 10 ? "0" : "") + n; }
+        function padN(n, w) {
+                var s = String(n);
+                while (s.length < w) s = "0" + s;
+                return s;
+        }
+
+        function daysInMonth(month, year) {
+                var m = ((month - 1) % 12 + 12) % 12;
+                if (m === 1 && typeof config.isLeapYear === "function" && config.isLeapYear(year)) {
+                        return config.leapFebDays;
+                }
+                var arr = config.monthLengths || DEFAULT_MONTH_LENGTHS;
+                return arr[m] || 30;
+        }
+
+        function phaseFor(hour) {
+                var phases = config.phases || DEFAULT_PHASES;
+                for (var i = 0; i < phases.length; i++) {
+                        var p = phases[i];
+                        if (hour >= p.from && hour < p.till) return p;
+                }
+                return phases[0];
+        }
+
+        /* === Carry-over normalizer (data-driven via config.elements) ========
+         * Takes a state whose fields may have overflowed and cascades the
+         * overflow up through the chain. Every bound is read from
+         * config.elements so authors can customize the calendar (e.g.
+         * 10-hour days, 5-day weeks) via configure(). */
+        function normalize(s) {
+                var E = config.elements;
+                s.minute = s.minute || E.minute.min;
+                s.hour   = s.hour   || E.hour.min;
+                s.date   = s.date   || E.date.min;
+                s.day    = s.day    || E.day.min;
+                s.days   = s.days   != null ? s.days : E.days.min;
+                s.month  = s.month  || E.month.min;
+                s.year   = s.year   || E.year.min;
+
+                /* 1. minute → hour */
+                var minRange = E.minute.max - E.minute.min + 1;
+                var minCarry = Math.floor((s.minute - E.minute.min) / minRange);
+                s.minute = E.minute.min + ((s.minute - E.minute.min) % minRange + minRange) % minRange;
+                s.hour += minCarry;
+
+                /* 2. hour → date + day + days (all three track calendar days).
+                 * day-of-week cycles mod 7, date cascades into month/year,
+                 * and `days` (total elapsed) increments by the same amount. */
+                var hrRange = E.hour.max - E.hour.min + 1;
+                var hourCarry = Math.floor((s.hour - E.hour.min) / hrRange);
+                s.hour = E.hour.min + ((s.hour - E.hour.min) % hrRange + hrRange) % hrRange;
+                if (hourCarry !== 0) {
+                        var dayRange = E.day.max - E.day.min + 1;
+                        s.day = E.day.min + (((s.day - E.day.min) + hourCarry) % dayRange + dayRange) % dayRange;
+                        s.date += hourCarry;
+                        s.days += hourCarry;   /* sink: counts up, never cascades */
+                }
+
+                /* 3. month → year (BEFORE date cascade so daysInMonth is right) */
+                var monRange = E.month.max - E.month.min + 1;
+                while (s.month > E.month.max) { s.month -= monRange; s.year += 1; }
+                while (s.month < E.month.min) { s.month += monRange; s.year -= 1; }
+
+                /* 4. date → month → year (cascade until date fits the month) */
+                var dim = daysInMonth(s.month, s.year);
+                while (s.date > dim) {
+                        s.date -= dim;
+                        s.month += 1;
+                        if (s.month > E.month.max) { s.month = E.month.min; s.year += 1; }
+                        dim = daysInMonth(s.month, s.year);
+                }
+                while (s.date < E.date.min) {
+                        s.month -= 1;
+                        if (s.month < E.month.min) { s.month = E.month.max; s.year -= 1; }
+                        s.date += daysInMonth(s.month, s.year);
+                }
+
+                return s;
+        }
+
+        function getSafeTime() {
+                var t = V().time || {};
+                var E = config.elements;
+                return {
+                        minute: t.minute != null ? t.minute : E.minute.min,
+                        hour:   t.hour   != null ? t.hour   : E.hour.min,
+                        date:   t.date   != null ? t.date   : E.date.min,
+                        day:    t.day    != null ? t.day    : E.day.min,
+                        days:   t.days   != null ? t.days   : E.days.min,
+                        month:  t.month  != null ? t.month  : E.month.min,
+                        year:   t.year   != null ? t.year   : E.year.min
+                };
+        }
+
+        /* === Element formatter (single source of truth for leaf macros,
+         *    composite card, formatDate, formatTime, get() derived fields) ===
+         * Returns the human-readable string for one element of a state.
+         * fmtOverride (hour only) lets <<uiHour "12h">> override per-call. */
+        function formatElement(el, t, fmtOverride) {
+                switch (el) {
+                case "minute":
+                        return pad2(t.minute);
+                case "hour":
+                        var fmt = fmtOverride || config.format;
+                        if (fmt === "12h") {
+                                var h12 = t.hour % 12; if (h12 === 0) h12 = 12;
+                                return String(h12);
+                        }
+                        return pad2(t.hour);
+                case "ampm":
+                        return t.hour < 12 ? "AM" : "PM";
+                case "date":
+                        return config.padDate ? pad2(t.date) : String(t.date);
+                case "day":
+                        if (config.dayNames && config.dayNames.length) {
+                                var di = ((t.day % config.dayNames.length) + config.dayNames.length) % config.dayNames.length;
+                                return config.dayNames[di];
+                        }
+                        return String(t.day);
+                case "days":
+                        /* Total elapsed-days counter — just the number.
+                         * Authors can wrap it: "Day <<uiDays>>". */
+                        return String(t.days);
+                case "month":
+                        if (config.monthNames && config.monthNames.length) {
+                                var mi = (((t.month - 1) % config.monthNames.length) + config.monthNames.length) % config.monthNames.length;
+                                return config.monthNames[mi];
+                        }
+                        return config.padMonth ? pad2(t.month) : String(t.month);
+                case "year":
+                        return config.padYear > 0 ? padN(t.year, config.padYear) : String(t.year);
+                case "phase":
+                        return phaseFor(t.hour).label;
+                default:
+                        return "";
+                }
+        }
+
+        /* =====================================================================
+         *  setup.time — public API
+         * ===================================================================== */
+        setup.time = {
+                config: config,
+
+                configure: function (opts) {
+                        if (!opts) return;
+                        Object.keys(opts).forEach(function (k) {
+                                if (Object.prototype.hasOwnProperty.call(opts, k)) {
+                                        config[k] = opts[k];
+                                }
+                        });
+                },
+
+                /* --- Single advance function -----------------------------------
+                 * Takes element name + amount. Cascading elements (minute, hour,
+                 * date, day) overflow naturally through the chain via normalize().
+                 * Clamping elements (month, year) cascade their own carry but
+                 * CLAMP date to the new month's length (Jan 31 + 1 month →
+                 * Feb 28, not Mar 3).
+                 *
+                 * "day" (day-of-week) is not independently advanceable — it's
+                 * a label that tracks calendar days. advance("day", N) is
+                 * an alias for advance("date", N): the calendar moves forward
+                 * by N days and the day-of-week advances as a consequence. */
+                advance: function (element, amount) {
+                        if (element === "day") element = "date";
+
+                        /* `days` is a sink — it auto-increments when date/hour
+                         * roll over, but authors can't advance it directly.
+                         * Use set({days:N}) to reset it. */
+                        if (element === "days") {
+                                console.warn('[time] advance: "days" is not directly advanceable — it auto-increments on date/hour rollover. Use set({days:N}) to set it.');
+                                return getSafeTime();
+                        }
+
+                        var t = getSafeTime();
+                        var def = config.elements[element];
+                        if (!def) {
+                                console.warn('[time] advance: unknown element "' + element + '"');
+                                return t;
+                        }
+                        var n = Number(amount) || 0;
+                        t[element] += n;
+
+                        /* Advancing date also advances day-of-week AND the
+                         * total-elapsed-days counter, since both track
+                         * calendar days. The modulo handles negative amounts. */
+                        if (element === "date") {
+                                var E = config.elements;
+                                var dayRange = E.day.max - E.day.min + 1;
+                                t.day = E.day.min + (((t.day - E.day.min) + n) % dayRange + dayRange) % dayRange;
+                                t.days += n;   /* sink: counts up with date */
+                        }
+
+                        if (def.clamp) {
+                                /* Month/year: cascade own carry, then clamp date.
+                                 * We do NOT call normalize() here because adding
+                                 * calendar months/years is not the same as adding
+                                 * days — date overflow should clamp, not cascade.
+                                 * Also: month/year advances do NOT touch day-of-week
+                                 * or `days` (months have variable day counts). */
+                                if (element === "month") {
+                                        var monRange = def.max - def.min + 1;
+                                        while (t.month > def.max) { t.month -= monRange; t.year += 1; }
+                                        while (t.month < def.min) { t.month += monRange; t.year -= 1; }
+                                }
+                                var dim = daysInMonth(t.month, t.year);
+                                if (t.date > dim) t.date = dim;
+                        } else {
+                                /* minute/hour/date: full cascade (normalize
+                                 * also bumps `days` on hour overflow) */
+                                normalize(t);
+                        }
+
+                        V().time = t;
+                        return t;
+                },
+
+                advanceToHour: function (hour, minute) {
+                        var t = getSafeTime();
+                        hour   = Number(hour)   || 0;
+                        minute = Number(minute) || 0;
+                        var curMin = t.hour * 60 + t.minute;
+                        var tgtMin = hour * 60 + minute;
+                        var diff   = tgtMin - curMin;
+                        if (diff <= 0) diff += 24 * 60;
+                        return this.advance("minute", diff);
+                },
+
+                set: function (opts) {
+                        if (!opts) return null;
+                        var t = getSafeTime();
+                        if (opts.minute != null) t.minute = Number(opts.minute);
+                        if (opts.hour   != null) t.hour   = Number(opts.hour);
+                        if (opts.date   != null) t.date   = Number(opts.date);
+                        if (opts.day    != null) t.day    = Number(opts.day);
+                        if (opts.days   != null) t.days   = Number(opts.days);
+                        if (opts.month  != null) t.month  = Number(opts.month);
+                        if (opts.year   != null) t.year   = Number(opts.year);
+                        normalize(t);
+                        V().time = t;
+                        return t;
+                },
+
+                /* --- Readers (do not mutate) ----------------------------------- */
+                get: function () {
+                        var t = getSafeTime();
+                        var ph = phaseFor(t.hour);
+                        return {
+                                minute: t.minute, hour: t.hour, date: t.date,
+                                day: t.day, days: t.days, month: t.month, year: t.year,
+                                phase: ph.label, phaseLabel: ph.label,
+                                isDaytime: t.hour >= 6 && t.hour < 20,
+                                dayName: formatElement("day", t),
+                                monthName: formatElement("month", t),
+                                display: this.format(),
+                                dateString: this.formatDate(),
+                                timeString: this.formatTime()
+                        };
+                },
+
+                format: function () {
+                        var t = getSafeTime();
+                        if (config.format === "12h") {
+                                var h12 = t.hour % 12; if (h12 === 0) h12 = 12;
+                                return h12 + ":" + pad2(t.minute) + " " + (t.hour < 12 ? "AM" : "PM");
+                        }
+                        return pad2(t.hour) + ":" + pad2(t.minute);
+                },
+
+                formatDate: function () {
+                        var t = getSafeTime();
+                        var parts = [];
+                        (config.displayElements || []).forEach(function (el) {
+                                if (DATE_ELEMENTS.indexOf(el) !== -1) parts.push(formatElement(el, t));
+                        });
+                        return parts.join(config.separator);
+                },
+
+                formatTime: function () {
+                        var t = getSafeTime();
+                        var parts = [];
+                        (config.displayElements || []).forEach(function (el) {
+                                if (TIME_ELEMENTS.indexOf(el) !== -1) parts.push(formatElement(el, t));
+                        });
+                        return parts.join(config.separator);
+                },
+
+                phase:     function () { return this.get().phaseLabel; },
+                isDaytime: function () { return this.get().isDaytime;  },
+                dayName:   function () { return this.get().dayName;    },
+                monthName: function () { return this.get().monthName;  }
+        };
+
+        /* =====================================================================
+         *  UI display macros — ui prefix per widgets.twee convention.
+         *  Each renders ONE element's value. Compose freely:
+         *    <<uiDate>>/<<uiMonth>>/<<uiYear>>              → "1/1/1"
+         *    <<uiHour "12h">>:<<uiMinute>> <<uiAmpm>>       → "8:00 AM"
+         *    <<uiDay>>, <<uiDate>> <<uiMonth>> <<uiYear>>   → "Moonsday, 1 Jan 1"
+         * ===================================================================== */
+        function makeUIMacro(el) {
+                return {
+                        handler: function () {
+                                var t = getSafeTime();
+                                this.output.appendChild(
+                                        document.createTextNode(formatElement(el, t))
+                                );
+                        }
+                };
+        }
+
+        Macro.add("uiMinute", makeUIMacro("minute"));
+        Macro.add("uiDate",   makeUIMacro("date"));
+        Macro.add("uiDay",    makeUIMacro("day"));
+        Macro.add("uiDays",   makeUIMacro("days"));
+        Macro.add("uiMonth",  makeUIMacro("month"));
+        Macro.add("uiYear",   makeUIMacro("year"));
+        Macro.add("uiPhase",  makeUIMacro("phase"));
+        Macro.add("uiAmpm",   makeUIMacro("ampm"));
+
+        /* uiHour — with optional per-call format override.
+         *   <<uiHour>>         uses global config.format
+         *   <<uiHour "12h">>   forces 12h display ("8")
+         *   <<uiHour "24h">>   forces 24h display ("08") */
+        Macro.add("uiHour", {
+                handler: function () {
+                        var t = getSafeTime();
+                        var fmt = (this.args.length > 0 && this.args[0])
+                                ? String(this.args[0]) : config.format;
+                        this.output.appendChild(
+                                document.createTextNode(formatElement("hour", t, fmt))
+                        );
+                }
+        });
+
+        /* === Composite card — <<uiTime>> ====================================
+         * Two-line block: date-line (top) from date-like elements in
+         * displayElements, time-line (bottom) from time-like elements.
+         * If either set is empty, only the other line renders. The
+         * data-phase attribute drives the accent border color. */
+        Macro.add("uiTime", {
+                handler: function () {
+                        var t = getSafeTime();
+                        var ph = phaseFor(t.hour).label.toLowerCase();
+
+                        var dateParts = [];
+                        var timeParts = [];
+                        (config.displayElements || []).forEach(function (el) {
+                                var v = formatElement(el, t);
+                                if (!v) return;
+                                if (DATE_ELEMENTS.indexOf(el) !== -1) dateParts.push(v);
+                                else if (TIME_ELEMENTS.indexOf(el) !== -1) timeParts.push(v);
+                        });
+
+                        var el = h("div", { "class": "time-display", "data-phase": ph });
+                        if (dateParts.length) {
+                                el.appendChild(h("div", { "class": "time-display__date" },
+                                        dateParts.join(config.separator)));
+                        }
+                        if (timeParts.length) {
+                                el.appendChild(h("div", { "class": "time-display__clock" },
+                                        timeParts.join(config.separator)));
+                        }
+                        this.output.appendChild(el);
+                }
+        });
+
+        /* =====================================================================
+         *  Mutator macros — time prefix per author macro convention.
+         *  Single advance macro takes element name + amount. */
+        Macro.add("timeAdvance", {
+                handler: function () {
+                        if (this.args.length < 2)
+                                return this.error('usage: <<timeAdvance "element" amount>>  (e.g. <<timeAdvance "hour" 2>>)');
+                        setup.time.advance(this.args[0], this.args[1]);
+                        setup.ui.refresh();
+                }
+        });
+
+        Macro.add("timeAdvanceTo", {
+                handler: function () {
+                        if (!this.args.length) return this.error("usage: <<timeAdvanceTo hour [minute]>>");
+                        setup.time.advanceToHour(this.args[0], this.args[1] || 0);
+                        setup.ui.refresh();
+                }
+        });
+
+        Macro.add("timeSet", {
+                handler: function () {
+                        if (!this.args.length) return this.error("usage: <<timeSet {year:.., month:.., ...}>>");
+                        var opts = this.args[0];
+                        if (typeof opts !== "object" || opts === null) {
+                                return this.error("timeSet requires an object like {year:2, month:3, date:15}");
+                        }
+                        setup.time.set(opts);
+                        setup.ui.refresh();
+                }
+        });
+
+        /* === Optional auto-advance on passage transition ====================
+         * Fires on :passagestart (before passage content is wikified) so the
+         * rendered passage sees the updated time. Skipped on the very first
+         * passage (State.length < 2) so starting the game costs no time. */
+        $(document).on(":passagestart", function () {
+                if (config.autoAdvanceMinutes > 0 && State.length >= 2) {
+                        setup.time.advance("minute", config.autoAdvanceMinutes);
+                }
+        });
+})();
+
+:: TimeStyle [stylesheet]
+/* =========================================================================
+ * Time display — compact header block in the left sidebar. Uses the
+ * shell's CSS variables so it scales with --ui-unit and matches the
+ * dark palette. The left accent stripe is recolored per phase via
+ * [data-phase="..."] for at-a-glance time-of-day mood.
+ * ========================================================================= */
+.time-display {
+        margin: 0 0 calc(var(--ui-unit) * 0.5) 0;
+        padding: calc(var(--ui-unit) * 0.75) calc(var(--ui-unit) * 1);
+        border: 1px solid var(--ui-border);
+        border-left: 3px solid var(--ui-accent);
+        border-radius: 3px;
+        background: var(--ui-bg-raised);
+        text-align: center;
+        line-height: 1.2;
+}
+.time-display__date {
+        color: var(--ui-text-dim);
+        font-size: 85%;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: calc(var(--ui-unit) * 0.25);
+}
+.time-display__clock {
+        color: var(--ui-text);
+        font-size: 160%;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.05em;
+}
+
+/* Phase-tinted accent border — quick glanceable mood cue */
+.time-display[data-phase="night"]     { border-left-color: #5b6ee1; }
+.time-display[data-phase="dawn"]      { border-left-color: #f4a259; }
+.time-display[data-phase="morning"]   { border-left-color: #f9c74f; }
+.time-display[data-phase="noon"]      { border-left-color: #f9d71c; }
+.time-display[data-phase="afternoon"] { border-left-color: #f8961e; }
+.time-display[data-phase="evening"]   { border-left-color: #e76f51; }
